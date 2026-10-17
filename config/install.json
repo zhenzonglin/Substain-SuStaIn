@@ -1,0 +1,27 @@
+{
+  "_说明": "所有安装路径与网络入口。基于Linux x86_64 / Python3.10，使用预编译官方依赖wheel，无需工作站C++编译。",
+  "project_dir": "..",
+  "base_python": "/data02/linzhenzong/Substain_GB/envs/t1/bin/python",
+  "venv_dir": ".venv",
+  "requirements": "requirements.lock",
+  "wheel_manifest": "vendor/manifest.json",
+  "pip_index_url": "https://pypi.org/simple",
+  "pip_version": "24.3.1",
+  "setuptools_version": "75.6.0",
+  "wheel_version": "0.45.1",
+  "allowed_domains": [
+    "pypi.org",
+    "files.pythonhosted.org",
+    "github.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com"
+  ],
+  "expected_python": [
+    3,
+    10
+  ],
+  "expected_system": "Linux",
+  "expected_machine": "x86_64"
+}

@@ -1,0 +1,28 @@
+{
+  "platform": "Linux x86_64, glibc>=2.31",
+  "python": "3.10",
+  "packages": {
+    "awkde": {
+      "repository": "https://github.com/noxtoby/awkde",
+      "commit": "1c31e55fe54c0cad80ab423a9605fc9ddfb2614c",
+      "wheel": "vendor/wheels/awkde-0.1-cp310-cp310-linux_x86_64.whl",
+      "sha256": "32edf801b9131458355be7e4c9eb099289f53c4aba4e35c6cb8249fa4e618764"
+    },
+    "kde_ebm": {
+      "repository": "https://github.com/ucl-pond/kde_ebm",
+      "commit": "3ad8b648a4a2d0a8df0707f382b54c4ebef0805c",
+      "wheel": "vendor/wheels/kde_ebm-0.0.3-py3-none-any.whl",
+      "sha256": "2f3376c4c9e4ed79edc93907e83e5369edab9317689af4823246dae8ddef4f0b"
+    },
+    "pySuStaIn": {
+      "repository": "https://github.com/ucl-pond/pySuStaIn",
+      "commit": "708fa22d89c9692dbeafcc2c31a1c8460ced5640",
+      "wheel": "vendor/wheels/pySuStaIn-0.1-py3-none-any.whl",
+      "sha256": "34fd601d432adeeb98acc150592ff191a48ba7082f132e0ecc827345a1274103"
+    }
+  },
+  "pysustain_source_sha256": {
+    "AbstractSustain.py": "5d0719ea48f04377215ee8c128b4483b7a055411a92d7f3989fa1e10a51b93a3",
+    "ZscoreSustain.py": "4c510a7e10332eea7361f1fe7ff7c8d66961843bf6993850c22b0027eda9ef66"
+  }
+}

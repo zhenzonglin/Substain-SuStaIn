@@ -1,0 +1,51 @@
+# ===== 独立合成集成验证；不得作为正式患者分析 =====
+extends: analysis.yaml
+project_dir: ..
+output_dir: runs/synthetic_validation
+cohorts:
+  LS: {derivatives: null, participants: null, metadata: null}
+  C3: {derivatives: null, participants: null, metadata: null}
+  GB: {derivatives: null, participants: null, metadata: null}
+runtime:
+  profile: synthetic_integration
+  blas_threads: 1
+model:
+  k_max: 2
+  folds: 2
+  startpoints: 2
+  cv_iterations: 60
+  fit_iterations: 100
+  stability_iterations: 60
+  seed: 20261018
+  stability_seeds: [20261019, 20261020]
+  z_vals: [1]
+  z_max: 3
+  posterior_samples: 20
+  display_samples: 60
+  posterior_batch_size: 7
+  burn_in_fraction: 0.1
+  workers: 2
+report:
+  title: Synthetic software validation — not patient results
+  bundle_dir: runs/synthetic_validation/bundles
+synthetic:
+  report_and_bundle: true
+  seed: 20261018
+  cohort_primary_n: {LS: 100, C3: 40, GB: 12}
+  age_interior_margin: 1.0
+  include_age_endpoints: true
+  outside_reference_ages: [45, 80]
+  age_center: 62.5
+  icv_mean_ml: 1400
+  icv_sd_ml: 80
+  icv_min_ml: 1000
+  disease_stage_min: 0.5
+  disease_stage_max: 4.0
+  subtype_loadings:
+    - [1.0, 0.5, 0.15]
+    - [0.15, 0.5, 1.0]
+  wmh_log_floor: 0.0
+  features:
+    - {feature_id: wmh_region01, label: Synthetic WMH region 1, modality: WMH, atlas_index: 1, transformed_mean: 0.5, residual_sd: 0.15, age_slope: 0.01, sex_effect: 0.02, log_icv_effect: 0.2}
+    - {feature_id: gm_region01, label: Synthetic GM region 1, modality: GM, atlas_index: 1, transformed_mean: 1.4, residual_sd: 0.10, age_slope: -0.003, sex_effect: 0.03, log_icv_effect: 1.0}
+    - {feature_id: gm_region02, label: Synthetic GM region 2, modality: GM, atlas_index: 2, transformed_mean: 1.1, residual_sd: 0.12, age_slope: -0.004, sex_effect: 0.02, log_icv_effect: 1.0}

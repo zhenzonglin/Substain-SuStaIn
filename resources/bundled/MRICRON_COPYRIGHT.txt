@@ -1,0 +1,103 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: MRIcron
+Upstream-Contact: Chris Rorden
+Source: http://www.nitrc.org/frs/?group_id=152
+
+Files: *
+Copyright: Copyright 2006-2010, Chris Rorden
+License: BSD-3-clause
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+  .
+  Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+  .
+  Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.  Neither the names of the
+  copyright owners nor the names of this project (MRIcron) may be used to
+  endorse or promote products derived from this software without specific prior
+  written permission.
+  .
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Files: fpmath/*
+Copyright: Copyright 2007, Jean Debord
+  Copyright 2001, Michael Hopper
+  Copyright (C) 1997 - 2002, Takuji Nishimura and Makoto Matsumoto
+License: LGPL-2.1+
+  On Debian systems the full text of the GNU Lesser General Public License can be
+  found in the `/usr/share/common-licenses/LGPL-2.1' file.
+  .
+  This is a copy of "TPMATH -- MATHEMATICAL LIBRARY FOR PASCAL COMPILERS",
+  available from:
+  http://www.unilim.fr/pages_perso/jean.debord/tpmath/tpmath.htm
+
+
+Files: fpmath/uranmt.pas
+Copyright: Copyright 1997 - 2002, Makoto Matsumoto and Takuji Nishimura
+License: BSD
+
+
+Files: rgb/*
+Copyright: Copyright 2007, Tom Gregorovic
+License: Modified_LGPL
+  The package is licensed under a standard LGPL that has been amended with
+  the following text:
+  .
+    This is the file COPYING.modifiedLGPL, it applies to several units in
+    the Lazarus sources distributed by members of the Lazarus Development
+    Team.  All files contains headers showing the appropriate license. See
+    there if this modification can be applied.
+    .
+    These files are distributed under the Library GNU General Public
+    License (see the file COPYING.LGPL) with the following modification:
+    .
+    As a special exception, the copyright holders of this library give you
+    permission to link this library with independent modules to produce an
+    executable, regardless of the license terms of these independent
+    modules, and to copy and distribute the resulting executable under
+    terms of your choice, provided that you also meet, for each linked
+    independent module, the terms and conditions of the license of that
+    module. An independent module is a module which is not derived from or
+    based on this library. If you modify this library, you may extend this
+    exception to your version of the library, but you are not obligated to
+    do so. If you do not wish to do so, delete this exception statement
+    from your version.
+  .
+  On Debian systems the full text of the GNU Lesser Public License can be
+  found in the `/usr/share/common-licenses/LGPL-2' file.
+
+
+Files: common/{DiskSpaceKludge,GraphicsMathLibrary}.pas
+Copyright: Copyright 1982-1998, Earl F. Glynn
+License: BSD
+  The original author gave approval to ship these files under the same terms as
+  MRIcron itself (see above for the full license text).
+
+
+Files: common/gzio2.pas
+Copyright: Copyright 1998, Jacques Nomssi Nzali
+  Copyright 1995-1998, Jean-loup Gailly
+  Copyright 1998, Jacques Nomssi Nzali
+License: GPL
+  This is a heavily modified version of gzio.pas that is available in the
+  'fpc-source' package.
+  .
+  On Debian systems the full text of the GNU Lesser Public License can be
+  found in the `/usr/share/common-licenses/GPL-2' file.
+
+
+Files: debian/*
+Copyright: Copyright 2010, Michael Hanke <michael.hanke@gmail.com>
+License: BSD

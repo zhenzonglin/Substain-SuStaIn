@@ -1,0 +1,125 @@
+# ===== 一、项目和所有输入路径 =====
+# 相对路径均以本文件的project_dir为根；可用extends叠加本机配置。
+project_dir: ..
+output_dir: runs/formal_v1
+paths:
+  mapping: resources/mappings/muse_gm_macro20_v1.tsv
+cohorts:
+  LS:
+    derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_LS/derivatives
+    participants: /data02/linzhenzong/Substain_GB/config/participants_LS.tsv
+    metadata: null  # participants已含age/sex；若另有元数据，在local.yaml配置实际路径。
+  C3:
+    derivatives: /data/usersdir/linzhenzong/Substain/derivatives/substain_features
+    participants: /data/usersdir/linzhenzong/Substain/config/participants.tsv
+    metadata: null
+  GB:
+    derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_GB/derivatives/substain_features
+    participants: /data02/linzhenzong/Substain_GB/config/participants_gb.tsv
+    metadata: null
+
+# ===== 二、自动处理资格与变量编码 =====
+ingest:
+  required_stages: [skullstrip, registration, lesion, wmh_seg, wmh, t1, qc]
+  age_valid_min: 0
+  age_valid_max: 120
+  icv_consistency_rtol: 0.000001
+  sex_mapping: {male: male, female: female, M: male, F: female, 男: male, 女: female}
+  # 人工审核只保留原值，不作入模门槛。
+  manual_qc_required: false
+
+# ===== 三、LS独立参考；不含站点效应 =====
+reference:
+  age_min: 50
+  age_max: 75
+  folds: 5
+  seed: 20261018
+  spline_df: 4
+  min_reference_n: 40
+  min_residual_sd: 0.00000001
+  sex_encoding: {female: 0, male: 1}
+  wmh_transform: log1p
+  gm_transform: log
+  covariates: [age_spline, sex, log_icv]
+  diagnostic_z_thresholds: [1, 2, 3]
+  diagnostic_coverage_z: 1.96
+
+# ===== 四、官方SuStaIn配置 =====
+model:
+  k_max: 6
+  folds: 10
+  startpoints: 25
+  cv_iterations: 100000
+  fit_iterations: 1000000
+  stability_iterations: 100000
+  seed: 20261018
+  stability_seeds: [20261019, 20261020]
+  z_vals: [1, 2, 3]
+  z_max: 5
+  posterior_samples: 1000
+  display_samples: 1000
+  posterior_batch_size: 128
+  burn_in_fraction: 0.1
+  # burn-in仅用于本项目个体后验与展示抽样；官方CVIC仍遵循上游全链规则。
+  workers: 4
+
+# ===== 五、资源与执行身份 =====
+runtime:
+  profile: formal
+  max_memory_fraction: 0.5
+  memory_safety_factor: 2.0
+  disk_safety_factor: 1.2
+  memory_limit_gb: null
+  blas_threads: 1
+
+# ===== 六、空间展示资源与公开模板制图 =====
+assets:
+  wmh_atlas: resources/display/wmh20.nii.gz
+  gm_atlas: resources/display/gm20.nii.gz
+  background: resources/display/ch2better.nii.gz
+  manifest: resources/display/manifest.json
+  bundled_dir: resources/bundled
+  bundled_manifest: resources/bundled/manifest.json
+  wmh_download_url: https://raw.githubusercontent.com/JinyongChung/WMH_progression_modeling/1d9c8456168fa8b3a0190c6e91ca3dfbc6c90068/MNI_ch2better_WM_20ROIs.nii.gz
+  download_timeout_seconds: 60
+  source_wmh_atlas: /data02/linzhenzong/Substain_GB/resources/templates/MNI_ch2better_WM_20ROIs.nii.gz
+  source_background: /data02/linzhenzong/Substain_GB/resources/templates/ch2better.nii.gz
+  source_gm_segmentation: resources/display/template_DLMUSE.nii.gz
+  template_python: /data02/linzhenzong/Substain_GB/envs/t1/bin/python
+  template_work_dir: .cache/template_segmentation
+  template_device: cpu
+  template_threads: 4
+  template_entry: /data02/linzhenzong/Substain_GB/envs/t1/bin/NiChart_DLMUSE
+  template_cli_args: ["-c", "1"]
+  public_template_kind: public_template
+  template_min_free_memory_gb: 16
+  label_interpolation: nearest
+
+# ===== 七、报告展示参数；所有标题与图注说明ROI模型而非体素统计 =====
+report:
+  formats: [png, svg, tiff]
+  font_family: DejaVu Sans
+  title: LS–C3–GB WMH/GM SuStaIn
+  stage_label: Model stage (not disease duration)
+  require_spatial_assets: true
+  bundle_dir: bundles/display
+  raster_dpi: 600
+  preview_dpi: 160
+  figure_width: 10.0
+  figure_height: 6.0
+  font_size: 10
+  credible_interval: 0.95
+  max_posterior_draws: 1000
+  stage_points: [0.25, 0.5, 0.75]
+  slice_fractions: [0.25, 0.4, 0.55, 0.7]
+  wmh_cmap: YlOrRd
+  gm_cmap: magma
+  pvd_cmap: viridis
+  distribution_cmap: Blues
+  cohort_colors: {LS: "#5A7C65", C3: "#32699B", GB: "#B85F45"}
+  strict: true
+
+# ===== 八、可移动展示包 =====
+bundle:
+  compression: gz
+  include_full_posterior: true

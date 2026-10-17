@@ -1,0 +1,22 @@
+# 患者输入、结果及本机配置始终留在工作站
+runs/
+data/
+input_bundles/
+config/local*.yaml
+config/local*.json
+resources/display/
+resources/private/
+# 环境、官方源码缓存及构建产物不进入Git
+.venv*/
+.cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+build/
+dist/
+*.log
+*.pkl
+*.pickle

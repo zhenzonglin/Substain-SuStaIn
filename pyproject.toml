@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools==75.6.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "substain-sustain"
+version = "0.1.0"
+description = "LS-referenced WMH and GM SuStaIn discovery and frozen validation"
+requires-python = ">=3.10,<3.11"
+dependencies = ["numpy", "scipy", "pandas", "statsmodels", "patsy", "scikit-learn", "matplotlib", "nibabel", "PyYAML", "Pillow", "pathos", "tqdm", "psutil"]
+
+[project.scripts]
+substain-sustain = "substain_sustain.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: real upstream SuStaIn integration", "slow: slower production-library checks"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

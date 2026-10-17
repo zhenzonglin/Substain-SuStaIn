@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-18",
+  "scientific_results": "not_run_on_real_cohorts",
+  "tests": {
+    "full_suite_passed": 49,
+    "full_suite_seconds": 36.75,
+    "post_network_guard_report_suite_passed": 10
+  },
+  "build": "sdist_and_wheel_passed",
+  "lint": "ruff_passed",
+  "syntax": "compileall_passed",
+  "restricted_network_install": {
+    "status": "pass",
+    "allowed_domains": [
+      "pypi.org",
+      "files.pythonhosted.org",
+      "github.com",
+      "api.github.com",
+      "raw.githubusercontent.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com"
+    ],
+    "observed_hosts": [
+      "files.pythonhosted.org",
+      "pypi.org"
+    ],
+    "fresh_environment": ".venv-install-check"
+  },
+  "synthetic": {
+    "reference_primary_n": 100,
+    "C3_primary_n": 40,
+    "GB_primary_n": 12,
+    "features": 3,
+    "official_tuning_iterations_per_model": 30000,
+    "report_figures": 17,
+    "png": 17,
+    "svg": 17,
+    "tiff_600dpi": 17,
+    "data_tables": 17,
+    "bundle": {
+      "status": "created",
+      "path": "/home/zhenzong2/analysis/Substain/sustain_analysis/runs/synthetic_validation/bundles/sustain-display-bundle.tar.gz",
+      "sha256": "fdf424a2e0711039c919e70db103536750759348c003e613d82417577adf4617",
+      "bytes": 9471075,
+      "files": 66,
+      "report_status": "technical_demo_complete"
+    },
+    "verification": {
+      "status": "pass",
+      "bundle_sha256": "fdf424a2e0711039c919e70db103536750759348c003e613d82417577adf4617",
+      "files_verified": 66,
+      "figures_regenerated": 17,
+      "tables_verified": 17,
+      "images_verified": 34,
+      "original_mri_required": false,
+      "original_project_required": false,
+      "rendered_images_in_bundle": false,
+      "network_disabled": true,
+      "network_guard_scope": "Python socket DNS/connect APIs in the detached report process",
+      "network_self_tests": [
+        "getaddrinfo",
+        "create_connection",
+        "connect",
+        "connect_ex"
+      ],
+      "report_status": "technical_demo_complete"
+    }
+  },
+  "formal_default": {
+    "features": 40,
+    "age_support": [
+      50,
+      75
+    ],
+    "site_effects": false,
+    "clinical_outcomes": false
+  },
+  "original_segmentation_project": "pre-existing modifications preserved; no participant pipeline rerun"
+}

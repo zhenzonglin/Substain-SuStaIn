@@ -1,0 +1,9 @@
+# 保持代码的跨平台字节身份；映射表保留生成时的精确字节与既有SHA256。
+* text=auto eol=lf
+*.tsv -text
+*.nii.gz binary
+*.whl binary
+# 原始映射的CRLF和第三方许可的空白按来源原样保留，不作风格重写。
+resources/mappings/*.tsv whitespace=cr-at-eol
+vendor/licenses/* -whitespace
+resources/bundled/*NOTICE.txt -whitespace

@@ -1,0 +1,30 @@
+{
+  "project_dir": "..",
+  "wheel_dir": "vendor/wheels",
+  "license_dir": "vendor/licenses",
+  "manifest": "vendor/manifest.json",
+  "platform": "Linux x86_64, glibc>=2.31",
+  "python": "3.10",
+  "packages": {
+    "awkde": {
+      "repository": "noxtoby/awkde",
+      "commit": "1c31e55fe54c0cad80ab423a9605fc9ddfb2614c",
+      "wheel_pattern": "awkde-*.whl"
+    },
+    "kde_ebm": {
+      "repository": "ucl-pond/kde_ebm",
+      "commit": "3ad8b648a4a2d0a8df0707f382b54c4ebef0805c",
+      "wheel_pattern": "kde_ebm-*.whl"
+    },
+    "pySuStaIn": {
+      "repository": "ucl-pond/pySuStaIn",
+      "commit": "708fa22d89c9692dbeafcc2c31a1c8460ced5640",
+      "wheel_pattern": "pySuStaIn-*.whl",
+      "verify_modules": [
+        "AbstractSustain.py",
+        "ZscoreSustain.py"
+      ]
+    }
+  },
+  "download_timeout_seconds": 60
+}

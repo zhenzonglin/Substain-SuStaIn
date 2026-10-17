@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source": "Public templates from the existing feature-extraction project",
+  "assets": {
+    "wmh_atlas": {
+      "filename": "wmh20.nii.gz",
+      "sha256": "252da6297879352fc2cdc16e9e902296cdecadeb1c32f468998a67a6f9bc27a7",
+      "shape": [
+        301,
+        370,
+        316
+      ],
+      "public_template": true
+    },
+    "gm_atlas": {
+      "filename": "gm20.nii.gz",
+      "sha256": "652b0976bb05eb8d4f73d728ff0bd569745081ac22efcc109e5febb8042ba5e3",
+      "shape": [
+        301,
+        370,
+        316
+      ],
+      "public_template": true,
+      "provenance": {
+        "public_template": true,
+        "source_template_sha256": "a094f3ccf383c495c9569625bd0c06993fd4b02d2a8d9966da5fea7d7e530e8d",
+        "native_segmentation_sha256": "fda2a08ac7344905d31fd089879e6709c553a90510731695a401e84c235e9038",
+        "macro_mapping_sha256": "41f1da79db7b977fef7eff55eb3381b9d8e34f2e35a508562394bc8a7de98b3e",
+        "output_sha256": "652b0976bb05eb8d4f73d728ff0bd569745081ac22efcc109e5febb8042ba5e3",
+        "labels": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ],
+        "mapping_scope": "15 official cortical + 5 project-defined noncortical regions",
+        "model_provenance": {
+          "dlmuse_dataset_json_sha256": "5033adc07e37c7267cb8fa2096aa66600936ce2af9c7e63d792fdd054a14a5b2",
+          "dlmuse_plans_json_sha256": "2d5d1f88a339fe67a02b6187182bfa7d4369451faec46ecca7f0dc4d0bb2345d",
+          "dlmuse_checkpoint_final_sha256": "7e0d2a58186ccc36007831e984155000068d0462b206dc723dadb839d37e3988",
+          "dlicv_dataset_json_sha256": "1a9890da9128fe5e64de0ea5fbfd025ec94b288c34538e33e666d92b34271f14",
+          "dlicv_plans_json_sha256": "da2f25c89f31658626900353339a14dd218003820a6cf6f9c8dda9e7241762e3",
+          "dlicv_checkpoint_final_sha256": "2926aa70504a040489ec0fd16da359e2191cbd235a83f4d466d1500dc78f40ba",
+          "public_template_only": true,
+          "template_generation_log": "local development cache; no patient data"
+        }
+      }
+    },
+    "background": {
+      "filename": "ch2better.nii.gz",
+      "sha256": "a094f3ccf383c495c9569625bd0c06993fd4b02d2a8d9966da5fea7d7e530e8d",
+      "shape": [
+        301,
+        370,
+        316
+      ],
+      "public_template": true
+    }
+  }
+}
