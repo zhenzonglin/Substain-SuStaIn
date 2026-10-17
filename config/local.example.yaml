@@ -1,0 +1,10 @@
+# 将本文件复制为local.yaml；只改此处的工作站路径/参数即可。
+extends: analysis.yaml
+# project_dir相对本文件，不随当前终端目录变化。
+project_dir: ..
+output_dir: runs/formal_v1
+# 若某队列不在同一工作站，用export-inputs导出后以input_bundle替代其源路径：
+# cohorts:
+#   C3:
+#     input_bundle: /path/to/C3_compact
+# 少量试跑必须使用独立输出目录及明确的synthetic配置，不能覆盖formal_v1。

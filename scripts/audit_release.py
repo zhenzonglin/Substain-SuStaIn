@@ -19,7 +19,7 @@ records=[]
 patterns=[re.compile(rb"ghp_[A-Za-z0-9]{36}"),re.compile(rb"github_pat_[A-Za-z0-9_]{40,}"),
           re.compile(rb"-----BEGIN (?:RSA|EC|OPENSSH) PRIVATE KEY-----")]
 for name in filter(None,names):
-    if any(name.startswith(value) for value in cfg["forbidden_prefixes"]):
+    if any(name.startswith(value) for value in cfg["forbidden_prefixes"]) and name not in cfg["allowed_config_examples"]:
         raise SystemExit("禁止发布目录："+name)
     if name.endswith(".nii.gz") and name not in cfg["allowed_image_assets"]:
         raise SystemExit("禁止发布非白名单影像："+name)

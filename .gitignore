@@ -3,6 +3,7 @@ runs/
 data/
 input_bundles/
 config/local*.yaml
+!config/local.example.yaml
 config/local*.json
 resources/display/
 resources/private/

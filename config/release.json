@@ -1,6 +1,7 @@
 {
   "project_dir": "..",
   "maximum_file_bytes": 10485760,
+  "allowed_config_examples": ["config/local.example.yaml"],
   "forbidden_prefixes": [
     "runs/",
     ".cache/",
