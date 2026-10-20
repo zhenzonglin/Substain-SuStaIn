@@ -38,3 +38,12 @@ SHA256：
 ## 尚未执行的正式研究步骤
 
 本机无法访问三队列工作站结果目录，因此没有核实正式样本数，也没有拟合正式LS–C3–GB模型。工作站安装后须按README核验真实路径并执行正式流程。软件/合成验证不能替代真实队列数据质控、参考分布诊断、模型稳定性及外部验证结论。
+
+## 2026-10-20 安装源继承修复
+
+工作站报告了访问pypi.org时的Network is unreachable。原安装器设置PIP_CONFIG_FILE=/dev/null并显式指定pypi.org，会绕过既有工作站pip配置。
+
+- 默认pip_index_url改为null，保留已有源、代理、证书及PIP_CONFIG_FILE。显式覆盖和本地wheel目录分别使用--index-url、--wheelhouse。
+- 9项安装专项测试通过；系统Python3.8语法编译及Ruff通过。
+- 全新Python3.10环境真实安装通过：以系统Python3.8启动安装器，禁止外部PyPI域名，只沿用PIP_CONFIG_FILE配置的本地测试镜像。共服务90次请求、45个普通依赖wheel，官方工具导入与pip check通过。
+- 依赖版本锁、模型算法、患者数据和已有分割环境未变更；工作站本身的镜像连通性仍需现场运行确认。

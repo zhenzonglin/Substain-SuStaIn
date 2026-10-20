@@ -6,6 +6,15 @@
 
 `config/install.json` 控制Python、虚拟环境、锁文件与pip入口；`config/synthetic.yaml` 控制独立技术验证。官方源代码身份由 `vendor/manifest.json` 锁定，wheel和模块源码校验不匹配时必须停止，不静默升级。
 
+安装来源配置：
+
+- `pip_index_url: null`：沿用当前用户/系统pip配置及`PIP_CONFIG_FILE`、`PIP_INDEX_URL`等环境变量，保留已有代理、额外源和证书。
+- `pip_index_url: "https://已有镜像/simple"`：显式指定主索引；命令行`--index-url`优先于配置。
+- `wheelhouse: null`：默认不使用离线目录；设为完整wheel目录或传入`--wheelhouse`后，使用`--no-index`并隔离远程软件源配置。该目录必须包含pip、setuptools、wheel及requirements.lock内的全部依赖。
+- `pip_timeout_seconds`和`pip_retries`：控制联网重试；设为null则使用pip现有设置。
+
+如果软件源只保存在某个旧虚拟环境的pip.conf，而非用户或系统配置，可通过`PIP_CONFIG_FILE`指定那个配置文件，或用`--index-url`传入已有源地址。安装失败保留已有环境；现有环境Python版本不符时明确停止，不删除或覆盖。
+
 ## 主要分区
 
 | 配置区 | 控制内容 |

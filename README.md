@@ -15,6 +15,13 @@ python3 scripts/bootstrap.py --config config/install.json
 cp config/local.example.yaml config/local.yaml
 ```
 
+安装器默认使用工作站现有的pip软件源、代理和证书配置（`pip_index_url: null`），不强制访问pypi.org。
+如需单次指定源，可加 `--index-url https://你的已有软件源/simple`；也可在安装配置填写该地址。
+如果遇到 `Network is unreachable` 后接 `No matching distribution`，先处理软件源连通性，不要据此更改锁定版本或删除虚拟环境。
+修正后运行 `git pull --ff-only` 并重试原安装命令即可复用已建环境。
+
+已有完整离线依赖时可使用 `--wheelhouse /完整wheel目录`。仓库的 `vendor/wheels` 仅包含三个上游工具，不是完整依赖目录。
+
 若原Python位置不同，修改 `config/install.json` 的 `base_python`，或使用：
 
 ```bash
