@@ -274,6 +274,10 @@ def render(cfg: dict, settings: dict, rows: list[dict], roots: list[dict], inacc
              f"整机：{psutil.cpu_count()}逻辑核 | CPU {psutil.cpu_percent():.1f}% | "
              f"内存 {memory.percent:.1f}% | 可用/总计 {memory.available / 2**30:.2f}/{memory.total / 2**30:.2f} GiB",
              "RSS含共享页重复计数；Ctrl+C仅关闭本监控。", "", "阶段状态"]
+    resources, resource_error = read_json(Path(cfg["output_dir"]) / "model/cv/resources.json")
+    allocation = str(resources.get("workers", "尚无记录")) if not resource_error else "记录不可读"
+    lines.insert(3, f"CV并行：配置上限 {cfg['model']['workers']} | 最近启动实际分配 {allocation} | "
+                 "待处理折少于上限时活跃worker会减少")
     if not roots:
         lines.append("  当前未检测到该分析的活跃入口；完成/失败状态以已保存记录为准。")
     for command, label in STAGES.items():

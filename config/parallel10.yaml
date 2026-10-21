@@ -1,0 +1,14 @@
+# ===== 一、只改变执行资源；不改变特征、种子、折数或MCMC =====
+workers: 10
+max_memory_fraction: 0.8
+# 内存估算仍保留原来的2倍安全系数；不足10个任务时在停止旧进程前退出。
+require_requested_workers: true
+
+# ===== 二、安全切换、审计和后台续跑 =====
+terminate_timeout_seconds: 30
+kill_timeout_seconds: 10
+backup_dir: .cache/parallel_switches
+log_dir: logs
+log_prefix: formal38_parallel10
+bundle_filename: sustain-display-bundle.tar.gz
+resume_stages: [crossvalidate, fit, validate, report, bundle, verify-bundle]

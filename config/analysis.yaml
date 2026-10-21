@@ -82,12 +82,13 @@ model:
   posterior_batch_size: 128
   burn_in_fraction: 0.1
   # burn-in仅用于本项目个体后验与展示抽样；官方CVIC仍遵循上游全链规则。
-  workers: 4
+  # 外层按CV折并行；官方起点串行，BLAS单线程；已运行任务需安全切换脚本。
+  workers: 10
 
 # ===== 六、资源与执行身份 =====
 runtime:
   profile: formal
-  max_memory_fraction: 0.5
+  max_memory_fraction: 0.8
   memory_safety_factor: 2.0
   disk_safety_factor: 1.2
   memory_limit_gb: null

@@ -62,6 +62,24 @@ cd /data02/linzhenzong/Substain-SuStaIn
 
 all会从ingest运行到report；已有且身份一致的阶段可复用。不要在已有活跃任务时重复启动。已中断的MCMC重新计算，不支持链内续跑。旧维度或旧合并方案的缓存不会被复用。
 
+## 当前4并行CV切换为10并行
+
+```bash
+cd /data02/linzhenzong/Substain-SuStaIn &&
+git pull --ff-only &&
+.venv/bin/python scripts/switch_parallel.py --config config/local.38.yaml --apply
+```
+
+本命令自己识别、停止当前配置的CV进程，并后台续跑；不要另开`all`任务。所有切换参数位于`config/parallel10.yaml`：10个外层CV任务，80%可用内存预算，保留2倍内存估算安全系数。预检不足10并行、源码/数据/科学参数改变或已进入fit时会拒绝切换。去掉`--apply`可只预检。
+
+原配置及所有被更新的缓存身份保存在`.cache/parallel_switches/时间戳/`，大型模型文件不会复制或修改。已完成的ingest、reference和完整模型/折继续使用，未保存的MCMC链重算。后台按crossvalidate→fit→validate→report→bundle→verify-bundle执行，任一阶段失败即停止。主模型及稳定性种子仍串行。
+
+切换后重新打开监控，检查“CV并行：配置上限10｜最近启动实际分配10”，并查看实际进程CPU和内存。完成的折会退出计算，因此活跃任务数可以少于10。
+
+```bash
+.venv/bin/python scripts/monitor.py --config config/local.38.yaml
+```
+
 ## 报告完成后保存展示包
 
 ```bash

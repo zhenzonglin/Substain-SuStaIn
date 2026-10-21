@@ -65,6 +65,17 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 
 ## 正式分析监控
 
+已完成导入和LS参考、当前处于交叉验证时，可将原4并行安全切换为10并行：
+
+```bash
+git pull --ff-only
+.venv/bin/python scripts/switch_parallel.py --config config/local.38.yaml --apply
+```
+
+`config/parallel10.yaml`集中设置10个CV任务、80%可用内存预算、停止等待时间、审计/日志路径和续跑阶段。脚本先核验源码、依赖、输入、LS参考、分折、随机种子与全部科学参数，再检查CPU/内存/磁盘。资源不足10并行时在停止旧任务前退出。它只停止当前项目和配置对应的CV进程，备份原配置及缓存身份，迁移workers与内存预算字段，并后台依次执行crossvalidate、fit、validate、report、bundle、verify-bundle。导入和LS参考不重跑；完整模型/折缓存保留，中断的未保存MCMC链重新计算。已进入fit或后续阶段会拒绝切换。
+
+不加`--apply`只预检。运行中的进程池不会因编辑YAML而扩容；不要直接改workers后同时再开一个任务。主模型及稳定性种子仍按现有串行流程执行。监控同时显示配置并行上限和最近实际分配值；全新任务默认10并行，内存不足时核心调度仍会降低并发以遵守预算。
+
 在另一终端运行，`--config`必须使用正式启动时的同一份配置：
 
 ```bash
