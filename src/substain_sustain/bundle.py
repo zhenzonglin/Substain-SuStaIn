@@ -116,7 +116,7 @@ def create_bundle(cfg: dict, output: Path, destination: Path) -> dict:
             target = staging / "data" / source.relative_to(output)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
-        portable_cfg = {key: copy.deepcopy(cfg[key]) for key in ("runtime", "reference", "report", "bundle") if key in cfg}
+        portable_cfg = {key: copy.deepcopy(cfg[key]) for key in ("runtime", "reference", "report", "bundle", "feature_selection") if key in cfg}
         portable_cfg["assets"] = {}
         for key in ASSET_KEYS:
             source = Path(cfg["assets"][key])
@@ -139,7 +139,7 @@ def create_bundle(cfg: dict, output: Path, destination: Path) -> dict:
         code_dir = staging / "src/substain_sustain"
         code_dir.mkdir(parents=True)
         (code_dir / "__init__.py").write_text('"""Portable SuStaIn report reproduction code."""\n', encoding="utf-8")
-        for name in ("report.py", "assets.py", "bundle.py"):
+        for name in ("report.py", "assets.py", "bundle.py", "feature_selection.py"):
             shutil.copyfile(Path(__file__).with_name(name), code_dir / name)
         dependency_found = False
         for name in ("requirements.lock", "requirements.txt", "requirements-report.txt", "pyproject.toml"):

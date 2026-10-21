@@ -10,7 +10,7 @@ import yaml
 
 # ===== 配置合并与路径解析 =====
 PATH_KEYS = {
-    "mapping", "derivatives", "participants", "metadata", "input_bundle", "manual_qc", "source_root",
+    "mapping", "model_mapping", "derivatives", "participants", "metadata", "input_bundle", "manual_qc", "source_root",
     "wmh_atlas", "gm_atlas", "background", "manifest", "source_wmh_atlas", "source_background",
     "source_gm_segmentation", "template_python", "template_tool", "template_model_dir",
     "template_work_dir", "template_entry", "bundle_dir", "bundled_dir", "bundled_manifest",
@@ -68,6 +68,8 @@ def load_config(path: str | Path) -> dict:
 
 # ===== 参数校验：不默默纠正或降级研究规格 =====
 def validate_config(cfg: dict) -> None:
+    from .feature_selection import selection_policy
+    selection_policy(cfg)
     if set(cfg.get("cohorts", {})) != {"LS", "C3", "GB"}:
         raise ValueError("cohorts必须恰含LS、C3、GB")
     ref = cfg["reference"]

@@ -1,0 +1,36 @@
+# ===== 保留工作站现有LS/GB配置，只覆盖本次明确修改的部分 =====
+# 复制为local.38.yaml后运行；原local.yaml与旧结果保留。
+extends: local.yaml
+project_dir: ..
+output_dir: runs/formal_LS_C3_GB_38_v1
+paths:
+  model_mapping: resources/mappings/muse_gm_macro19_striatopallidal_basalforebrain_v1.tsv
+
+# ===== C3手动迁移后的真实位置；状态JSON仍保持只读 =====
+cohorts:
+  C3:
+    derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3/derivatives/substain_features
+    participants: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3/participants.tsv
+    metadata: null
+    input_bundle: null
+    source_root: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3
+    relocate_feature_pointers: true
+
+# ===== WMH19+GM19，38特征、114事件；原始40维仍完整保存 =====
+feature_selection:
+  expected_model_features: 38
+  exclude:
+    - feature_id: wmh_basal_ganglia_layer4_ml
+      criterion: LS_primary_all_zero
+      reason: LS主年龄范围内该特征全部为零，无法估计LS残差标准差；保留原始体积但不进入模型。
+  merge:
+    - feature_id: gm_striatopallidal_basal_forebrain_ml
+      source_features: [gm_striatopallidal_ml, gm_basal_forebrain_ml]
+      operation: sum_raw_ml
+      label: Striatopallidal and basal forebrain
+      label_cn: 纹状体-苍白球-基底前脑
+      mapping_version: muse_gm_macro19_striatopallidal_basalforebrain_v1
+      reason: 用户最终指定合并原GM17纹状体-苍白球和GM19基底前脑，保留GM16丘脑独立；先合并mL体积，再拟合LS参考。
+
+report:
+  bundle_dir: runs/formal_LS_C3_GB_38_v1/bundles

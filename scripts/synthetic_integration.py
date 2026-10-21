@@ -143,7 +143,7 @@ def main() -> None:
                                      "reference_fitting": "actual statsmodels OLS and held-out LS five-fold diagnostics",
                                      "sustain_core": "actual frozen upstream EM/MCMC; three times 10000 tuning unchanged",
                                      "scope": "software integration validation, not formal patient findings",
-                                     "formal_contract_not_relaxed": "production ingest/reference retain 40-feature validation"})
+                                     "formal_contract_not_relaxed": "production retains raw 40 features, explicit LS-only exclusions and prespecified raw-volume GM merges"})
         atomic_json(output / "synthetic_config_resolved.json", cfg)
         prepare_reference(cfg, output)
     if not (output / "reference" / "manifest.json").is_file():

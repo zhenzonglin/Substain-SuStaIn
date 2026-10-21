@@ -101,3 +101,16 @@ def test_raw_snapshot_mismatch_is_counted(tmp_path):
                                  "features": {"wmh": {"raw_ml": {FEATURE: 0}}}}) + "\n")
     result = diagnostic.compare_snapshots(path, subset, [FEATURE], OPTIONS)
     assert result["features"][FEATURE]["mismatch"] == 1
+
+
+def test_input_audit_finds_zero_c3_without_exposing_original_id(tmp_path):
+    import pandas as pd
+    from substain_sustain.ingest import atomic_tsv
+    cfg, output = prepare_inputs(tmp_path)
+    atomic_tsv(output / "inputs/C3_audit.tsv", pd.DataFrame([
+        {"participant_id": "P001", "included": False, "reason": "file_missing",
+         "detail": "/source/sub-P001/status/t1.json"}]))
+    result = diagnostic.input_audit(cfg)
+    assert result["C3"]["included_n"] == 0
+    assert result["C3"]["reasons"] == {"file_missing": 1}
+    assert "P001" not in json.dumps(result)

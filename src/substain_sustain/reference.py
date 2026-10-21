@@ -16,6 +16,8 @@ import statsmodels.api as sm
 from patsy import cr
 from sklearn.model_selection import StratifiedKFold
 
+from .feature_selection import select_for_reference, validate_selection, model_frame, model_gm_mapping
+
 from .ingest import (
     atomic_json, atomic_tsv, canonical_json, guard_output, read_tsv,
     sha256_file, validate_feature_dictionary,
@@ -31,6 +33,7 @@ def _algorithm_identity() -> dict:
         "estimator": "statsmodels.api.OLS",
         "solver": "pinv",
         "implementation_sha256": sha256_file(Path(__file__)),
+        "feature_plan_sha256": sha256_file(Path(__file__).with_name("feature_selection.py")),
         "package_versions": {name: version(name) for name in ("statsmodels", "patsy", "numpy", "scikit-learn")},
     }
 
@@ -157,10 +160,10 @@ def _design(frame: pd.DataFrame, spec: dict) -> np.ndarray:
 
 
 # ---------- LS拟合与冻结转换 ----------
-def fit_reference(frame: pd.DataFrame, dictionary: pd.DataFrame, settings: dict) -> dict:
+def fit_reference(frame: pd.DataFrame, dictionary: pd.DataFrame, settings: dict, selection: dict | None = None) -> dict:
     """仅用传入的LS训练子集估计参数；不接受C3或GB学习常模。"""
     feature_ids = dictionary.feature_id.tolist()
-    data = _numeric_frame(frame, feature_ids)
+    data = _numeric_frame(model_frame(frame, selection) if selection is not None else frame, feature_ids)
     if not data.cohort.eq("LS").all():
         raise ValueError("常模只能在LS训练")
     if not data.age.between(settings["age_min"], settings["age_max"], inclusive="both").all():
@@ -181,13 +184,16 @@ def fit_reference(frame: pd.DataFrame, dictionary: pd.DataFrame, settings: dict)
     invalid = np.flatnonzero(~np.isfinite(scale) | (scale < float(settings["min_residual_sd"])))
     if len(invalid):
         raise ValueError("LS残差SD低于设定阈值: " + ",".join(feature_ids[index] for index in invalid))
-    return {"schema_version": MODEL_SCHEMA, "estimator": "statsmodels.api.OLS", "design": spec, "settings": settings,
+    result = {"schema_version": MODEL_SCHEMA, "estimator": "statsmodels.api.OLS", "design": spec, "settings": settings,
             "feature_ids": feature_ids, "modalities": modalities, "coefficients": coefficients.tolist(),
             "residual_sd": scale.tolist(), "disease_direction": [1 if item == "WMH" else -1 for item in modalities],
             "training_n": len(data), "training_rank": int(rank), "residual_degrees_of_freedom": int(len(data) - rank),
             "training_age_observed": [float(data.age.min()), float(data.age.max())],
             "training_subject_keys": data.subject_key.tolist(), "site_effects": False,
             "age_extrapolation": "natural_cubic_spline_linear_outside_boundary_knots"}
+    if selection is not None:
+        result["feature_selection"] = selection
+    return result
 
 
 def load_reference(path: Path) -> dict:
@@ -197,22 +203,31 @@ def load_reference(path: Path) -> dict:
     features = model.get("feature_ids", [])
     coefficients = np.asarray(model.get("coefficients"), dtype=float)
     scale = np.asarray(model.get("residual_sd"), dtype=float)
-    if len(features) != 40 or len(set(features)) != 40 or coefficients.ndim != 2 or coefficients.shape[1] != 40:
+    selection = model.get("feature_selection")
+    if selection is not None:
+        validate_selection(selection)
+        if features != selection["model_feature_ids"]:
+            raise ValueError("LS模型特征与冻结排除清单不一致")
+    expected = len(selection["model_feature_ids"]) if selection is not None else 40
+    if len(features) != expected or len(set(features)) != expected or coefficients.ndim != 2 or coefficients.shape[1] != expected:
         raise ValueError("LS常模特征或系数维数无效")
-    if scale.shape != (40,) or not np.isfinite(coefficients).all() or not np.isfinite(scale).all() or (scale <= 0).any():
+    if scale.shape != (expected,) or not np.isfinite(coefficients).all() or not np.isfinite(scale).all() or (scale <= 0).any():
         raise ValueError("LS常模包含无效系数或残差SD")
     return model
 
 
 def transform_frame(frame: pd.DataFrame, model: dict) -> pd.DataFrame:
     """使用冻结LS模型；新队列不得重新估计节点、中心约束、系数或SD。"""
-    data = _numeric_frame(frame, model["feature_ids"])
+    selection = model.get("feature_selection")
+    data = _numeric_frame(model_frame(frame, selection) if selection is not None else frame, model["feature_ids"])
     values = _transformed(data, model["modalities"], model["feature_ids"])
     prediction = _design(data, model["design"]) @ np.asarray(model["coefficients"])
     z = (values - prediction) / np.asarray(model["residual_sd"]) * np.asarray(model["disease_direction"])
     if not np.isfinite(z).all():
         raise ValueError("冻结常模产生非有限z值")
-    result = data.copy()
+    # z表仅含实际建模特征；被排除的原始体积仍在inputs，不混入z列。
+    excluded = [item["feature_id"] for item in model.get("feature_selection", {}).get("excluded", [])]
+    result = data.drop(columns=excluded, errors="ignore").copy()
     result.loc[:, model["feature_ids"]] = z
     result["age_in_support"] = result.age.between(model["settings"]["age_min"], model["settings"]["age_max"], inclusive="both")
     result["reference_role"] = result.cohort
@@ -247,20 +262,23 @@ def _diagnostics(raw: pd.DataFrame, zframe: pd.DataFrame, errors: np.ndarray,
     return records
 
 
-def _oof_reference(frame: pd.DataFrame, dictionary: pd.DataFrame, settings: dict) -> tuple[pd.DataFrame, pd.DataFrame, list[dict], list[dict]]:
+def _oof_reference(frame: pd.DataFrame, dictionary: pd.DataFrame, settings: dict,
+                   selection: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame, list[dict], list[dict]]:
     folds = int(settings["folds"])
     if frame.sex.value_counts().min() < folds:
         raise ValueError("LS每个性别至少需要folds名，无法保持五折性别分层")
     splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=int(settings["seed"]))
     assignments = frame[["participant_id", "subject_key", "cohort", "age", "sex"]].copy()
     assignments["fold"] = -1
-    oof = frame.copy()
+    oof = model_frame(frame, selection) if selection is not None else frame.copy()
     oof["fold"] = -1
     errors = np.empty((len(frame), len(dictionary)))
     diagnostics, models = [], []
     for fold, (train_index, test_index) in enumerate(splitter.split(frame, frame.sex)):
         training, heldout = frame.iloc[train_index], frame.iloc[test_index]
-        model = fit_reference(training, dictionary, settings)
+        model = fit_reference(training, dictionary, settings, selection)
+        if selection is not None:
+            model["feature_selection"] = selection
         prediction = transform_frame(heldout, model)
         oof.loc[test_index, dictionary.feature_id.tolist()] = prediction[dictionary.feature_id.tolist()].to_numpy()
         oof.loc[test_index, "fold"] = fold
@@ -289,15 +307,27 @@ def run_reference(cfg: dict, output: Path) -> dict:
     for cohort, frame in frames.items():
         if not frame.cohort.eq(cohort).all():
             raise ValueError(f"常模输入队列身份不一致: {cohort}")
+        if frame.empty or not frame.age.between(settings["age_min"], settings["age_max"]).any():
+            raise ValueError(f"{cohort}主年龄范围内导入人数为0；先检查inputs/{cohort}_audit.tsv，不能继续正式分析")
     eligible = frames["LS"].age.between(settings["age_min"], settings["age_max"], inclusive="both")
     ls = frames["LS"].loc[eligible].sort_values("subject_key").reset_index(drop=True)
     if len(ls) < int(settings["min_reference_n"]):
         raise ValueError(f"LS支持年龄内合格人数{len(ls)}低于min_reference_n={settings['min_reference_n']}")
+    dictionary, selection = select_for_reference(dictionary, ls, cfg)
+    gm_mapping = None
+    if selection["merged"]:
+        gm_mapping = model_gm_mapping(pd.read_csv(cfg["paths"]["mapping"], sep="\t"), dictionary, selection)
+        configured = cfg["paths"].get("model_mapping")
+        if configured:
+            expected_mapping = pd.read_csv(configured, sep="\t").astype(str)
+            if not expected_mapping.equals(gm_mapping.astype(str)):
+                raise ValueError("配置的GM19映射与冻结合并方案不一致；不能使用旧映射")
     training_columns = ["participant_id", "subject_key", "cohort", "age", "sex", "icv_ml", *dictionary.feature_id.tolist()]
-    training_bytes = ls[training_columns].to_csv(sep="\t", index=False, lineterminator="\n", float_format="%.17g").encode("utf-8")
+    training_bytes = model_frame(ls, selection)[training_columns].to_csv(sep="\t", index=False, lineterminator="\n", float_format="%.17g").encode("utf-8")
     # 常模身份只取LS支持范围内真正参与训练的数据；GB变化不影响冻结参数或训练身份。
     identity = {"training_data_sha256": hashlib.sha256(training_bytes).hexdigest(), "settings": settings,
                 "feature_dictionary_sha256": sha256_file(source / "feature_dictionary.tsv"),
+                "feature_selection": selection,
                 "algorithm_identity": _algorithm_identity()}
     reference_hash = hashlib.sha256(canonical_json(identity)).hexdigest()
     snapshot_identity = {"input_manifest_hash": input_manifest["input_hash"],
@@ -319,20 +349,28 @@ def run_reference(cfg: dict, output: Path) -> dict:
             if sha256_file(target / name) != expected:
                 raise ValueError(f"已有常模产物哈希改变: {name}")
         return old
-    model = fit_reference(ls, dictionary, settings)
+    model = fit_reference(ls, dictionary, settings, selection)
     model.update(reference_hash=reference_hash, training_data_sha256=identity["training_data_sha256"],
-                 algorithm_identity=identity["algorithm_identity"])
-    oof, assignments, diagnostics, fold_models = _oof_reference(ls, dictionary, settings)
+                 algorithm_identity=identity["algorithm_identity"], feature_selection=selection)
+    oof, assignments, diagnostics, fold_models = _oof_reference(ls, dictionary, settings, selection)
     fitted = transform_frame(ls, model)
     errors = fitted[dictionary.feature_id.tolist()].to_numpy() * np.asarray(model["residual_sd"])
     diagnostics.extend(_diagnostics(ls, fitted, errors, dictionary, settings, "LS_fit"))
     temporary = Path(tempfile.mkdtemp(prefix=".reference.", dir=output))
     try:
         atomic_json(temporary / "model.json", model)
+        atomic_json(temporary / "feature_selection.json", selection)
+        atomic_tsv(temporary / "feature_dictionary.tsv", dictionary)
+        if gm_mapping is not None:
+            atomic_tsv(temporary / "gm_model_mapping.tsv", gm_mapping)
+        atomic_tsv(temporary / "feature_exclusions.tsv", pd.DataFrame(selection["excluded"], columns=[
+            "feature_id", "reason", "criterion", "evidence_cohort", "ls_primary_n",
+            "ls_primary_nonzero_n", "ls_primary_unique_values"]))
         # 以真正保存再加载的JSON模型完成三队列转换，验证可移植的节点和中心约束。
         frozen = load_reference(temporary / "model.json")
         counts = {}
         for cohort, frame in frames.items():
+            atomic_tsv(temporary / f"{cohort}_model_raw.tsv", model_frame(frame, selection))
             transformed = transform_frame(frame, frozen)
             primary = transformed.loc[transformed.age_in_support].copy()
             atomic_tsv(temporary / f"{cohort}_z.tsv", transformed)

@@ -29,6 +29,7 @@ from sklearn.model_selection import KFold
 from threadpoolctl import threadpool_limits
 
 from .posterior import infer_posterior, sample_indices
+from .feature_selection import frozen_dictionary, selection_policy
 
 UPSTREAM_COMMIT = "708fa22d89c9692dbeafcc2c31a1c8460ced5640"
 UPSTREAM_HASHES = {
@@ -100,6 +101,12 @@ def _guard(directory: Path, identity: dict[str, Any]) -> None:
 
 def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
     required = [output / "inputs" / "feature_dictionary.tsv"]
+    # 下游身份包含冻结的排除与GM合并方案；配置变化不能复用旧参考或旧CV。
+    frozen_dictionary(output, cfg)
+    for name in ("feature_dictionary.tsv", "feature_selection.json"):
+        path = output / "reference" / name
+        if path.is_file():
+            required.append(path)
     reference_model = output / "reference" / "model.json"
     reference = json.loads(reference_model.read_text())
     reference_hash = reference.get("reference_hash")
@@ -115,6 +122,7 @@ def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
                                 **{name: version(name) for name in ("numpy", "scipy", "pandas", "scikit-learn", "pathos", "dill", "multiprocess", "threadpoolctl")}},
         "wrapper_source_sha256": {name: _hash(Path(__file__).with_name(name)) for name in ("model.py", "posterior.py")},
         "model_config": cfg["model"], "runtime_config": cfg.get("runtime", {}),
+        "feature_selection_policy": selection_policy(cfg),
         "reference_config": cfg.get("reference", {}),
         "input_sha256": {str(p.relative_to(output)): _hash(p) for p in files + required},
     }
@@ -139,8 +147,8 @@ def _upstream_provenance() -> dict[str, str]:
     return found
 
 
-def _features(output: Path) -> pd.DataFrame:
-    frame = pd.read_csv(output / "inputs" / "feature_dictionary.tsv", sep="\t", dtype={"feature_id": str})
+def _features(output: Path, cfg: dict | None = None) -> pd.DataFrame:
+    frame = frozen_dictionary(output, cfg)
     required = {"feature_id", "label", "modality", "atlas_index"}
     if not required.issubset(frame.columns) or frame.feature_id.duplicated().any() or frame.empty:
         raise ValueError("feature_dictionary.tsv 字段不完整或特征 ID 重复。")
@@ -175,8 +183,9 @@ def _settings(cfg: dict, n_features: int) -> dict:
         raise ValueError("主分析 z_vals 必须是严格递增的有限正值。")
     if not np.isfinite(settings["z_max"]) or settings["z_max"] <= thresholds[-1]:
         raise ValueError("z_max 必须严格大于最大事件阈值。")
-    if cfg.get("runtime", {}).get("profile", "formal") == "formal" and n_features != 40:
-        raise ValueError("正式分析合同要求 20 WMH + 20 GM 共 40 个特征。")
+    expected = selection_policy(cfg)["expected_model_features"]
+    if cfg.get("runtime", {}).get("profile", "formal") == "formal" and n_features != expected:
+        raise ValueError(f"正式模型要求配置指定的{expected}维，原始输入40维仍须完整保留。")
     return settings
 
 
@@ -296,7 +305,7 @@ def _audit_pickles(directory: Path, settings: dict, n_features: int, iterations:
 def _fold_worker(payload: dict) -> dict:
     output = Path(payload["output"])
     cfg, fold, splits = payload["cfg"], payload["fold"], payload["splits"]
-    features = _features(output)
+    features = _features(output, cfg)
     _, data = _read_z(output / "reference" / "C3_primary_z.tsv", features)
     settings = _settings(cfg, len(features))
     directory = output / "model" / "cv" / f"fold_{fold}"
@@ -344,7 +353,7 @@ def _fold_worker(payload: dict) -> dict:
 
 def run_crossvalidate(cfg: dict, output: Path) -> dict:
     output = Path(output)
-    features = _features(output)
+    features = _features(output, cfg)
     frame, data = _read_z(output / "reference" / "C3_primary_z.tsv", features)
     settings = _settings(cfg, len(features))
     _assert_primary(frame, settings, "C3")
@@ -391,7 +400,8 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
     saved = json.loads((directory / "manifest.json").read_text())
     current = _identity(cfg, output, [output / "reference" / "C3_primary_z.tsv"], "C3_crossvalidation")
     for key in ("role", "schema_version", "upstream_commit", "reference_hash", "upstream_source_sha256",
-                "wrapper_source_sha256", "dependency_versions", "reference_config", "input_sha256"):
+                "wrapper_source_sha256", "dependency_versions", "reference_config", "input_sha256",
+                "feature_selection_policy"):
         if saved.get(key) != current.get(key):
             raise ValueError(f"当前拟合与已完成 CV 身份不符（{key}），必须重新交叉验证。")
     # 允许仅改变最终链、稳定性和后验展示参数；CV 实际使用的参数必须相同。
@@ -495,7 +505,7 @@ def run_fit(cfg: dict, output: Path) -> dict:
     output = Path(output)
     selection_path = output / "model" / "cv" / "selection.json"
     selection = _validated_selection(cfg, output)
-    features = _features(output)
+    features = _features(output, cfg)
     frame, data = _read_z(output / "reference" / "C3_primary_z.tsv", features)
     settings = _settings(cfg, len(features))
     _assert_primary(frame, settings, "C3")
@@ -573,17 +583,22 @@ def run_validate(cfg: dict, output: Path) -> dict:
     fit_summary = json.loads(summary_path.read_text())
     if fit_summary.get("status") != "complete":
         raise ValueError("主模型尚未完成，不能开始冻结外部应用。")
-    features = _features(output)
+    features = _features(output, cfg)
     settings = _settings(cfg, len(features))
     chosen = int(fit_summary["n_subtypes"])
     fit_manifest = json.loads((output / "model" / "fit" / "manifest.json").read_text())
     if fit_manifest["model_config"] != cfg["model"]:
         raise ValueError("GB 应用参数必须与冻结 C3 模型完全相同。")
+    if fit_manifest.get("feature_selection_policy") != selection_policy(cfg):
+        raise ValueError("GB应用的特征排除配置必须与冻结C3模型一致")
     reference_model_path = output / "reference" / "model.json"
     reference_hash = json.loads(reference_model_path.read_text()).get("reference_hash", _hash(reference_model_path))
     if fit_manifest["reference_hash"] != reference_hash:
         raise ValueError("LS 参考模型已改变，拒绝应用旧 C3 模型。")
-    for source in ("inputs/feature_dictionary.tsv",):
+    dictionary_sources = ["inputs/feature_dictionary.tsv"]
+    if (output / "reference/feature_selection.json").is_file():
+        dictionary_sources.extend(["reference/feature_dictionary.tsv", "reference/feature_selection.json"])
+    for source in dictionary_sources:
         if fit_manifest["input_sha256"][source] != _hash(output / source):
             raise ValueError("参考模型或特征字典已改变，拒绝应用旧 C3 模型。")
     primary_path = output / "model" / "fit" / "primary" / "pickle_files" / f"C3_subtype{chosen - 1}.pickle"

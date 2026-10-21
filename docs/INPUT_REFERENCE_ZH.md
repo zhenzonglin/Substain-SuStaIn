@@ -1,6 +1,6 @@
 # 输入导入与LS冻结常模
 
-本模块从已经完成的分割结果提取原始体积，构建LS健康参考，再对C3发现集和GB验证集应用同一个冻结变换。它不重新分割患者MRI，不使用临床结局，也不拟合站点效应。正式特征为WMH20加纯GM20。
+本模块从已经完成的分割结果提取原始体积，构建LS健康参考，再对C3发现集和GB验证集应用同一个冻结变换。它不重新分割患者MRI，不使用临床结局，也不拟合站点效应。原始输入为WMH20加纯GM20；模型为WMH19加GM19，排除LS全零的`wmh_basal_ganglia_layer4_ml`，合并原GM17和GM19的原始体积，保留丘脑GM16独立，不删原始列。
 
 ## 1. 工作站路径与配置入口
 
@@ -169,6 +169,10 @@ python -m substain_sustain reference --config config/local.yaml
 | 文件 | 内容 |
 |---|---|
 | `model.json` | 全LS支持内训练得到的冻结参数、算法身份和参考hash |
+| `feature_dictionary.tsv` | 入模38维的冻结顺序；atlas_index为模型编号，source_atlas_indices保留原图谱标签；WMH编号保留缺口4 |
+| `gm_model_mapping.tsv` | 119个原生灰质标签恰好形成19个互斥GM宏区，保留原GM20归属 |
+| `LS_model_raw.tsv`等 | 三队列排除/合并后、标准化前的38维体积；不替代inputs内原始40维 |
+| `feature_selection.json`, `feature_exclusions.tsv` | 配置明确排除的特征、LS全零证据、理由；不使用C3/GB决定排除 |
 | `LS_z.tsv`, `C3_z.tsv`, `GB_z.tsv` | 全部合格年龄的z及`age_in_support`标记 |
 | `LS_primary_z.tsv`, `C3_primary_z.tsv`, `GB_primary_z.tsv` | 50–75岁主分析表 |
 | `LS_oof_z.tsv` | LS内部留出预测，含fold编号 |
@@ -184,5 +188,7 @@ python -m substain_sustain reference --config config/local.yaml
 - `transform_hash`结合冻结参考身份与输入快照身份，保护已经生成的三队列z表。
 
 同一输出目录发现任何输入或参数变化会拒绝覆盖。仅GB改变时，参考身份不变，但转换身份改变，仍需新输出目录。后续C3模型选择与拟合的训练身份应使用`reference_hash`和C3训练矩阵，不能把GB快照身份当作训练信息。
+
+参考拟合前检查三个队列的主年龄范围均有合格输入；C3为0时先处理导入审计，不能把成功写出空表视为队列已就绪。人工迁移目录可显式设置`cohorts.C3.relocate_feature_pointers: true`，保留原指针的本例子目录后缀，定位到新derivatives根；不修改上游状态文件、不猜测文件名、不跳过身份和完整性检查。
 
 全部结果展示还需保留下游SuStaIn模型样本、CV结果、GB冻结推断、绘图代码和空间展示atlas；本节输入/常模文件是其中的必要组成部分。ROI模型脑图不需要转移每个患者的NIfTI，但不能将ROI数值投影解释为新完成的个体或群体体素统计。

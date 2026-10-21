@@ -14,6 +14,9 @@ def test_doctor_empty_sources_not_ready():
     result=doctor(cfg)
     assert result["cohort_paths_ready"] is False
     assert result["workflow_ready"] is False
+    assert result["analysis_features"]["by_modality"] == {"WMH": 19, "GM": 19}
+    assert result["analysis_features"]["events"] == 114
+    assert result["analysis_features"]["merge"][0]["source_features"] == ["gm_striatopallidal_ml", "gm_basal_forebrain_ml"]
 
 
 def test_boolean_rejected_as_scientific_integer():

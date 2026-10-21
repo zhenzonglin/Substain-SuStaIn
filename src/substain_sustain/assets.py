@@ -10,6 +10,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from nibabel.processing import resample_from_to
+from .feature_selection import source_atlas_labels
 
 ASSET_KEYS = ("wmh_atlas", "gm_atlas", "background")
 
@@ -63,7 +64,7 @@ def validate_assets(cfg: dict, feature_dictionary: pd.DataFrame | None = None) -
             if feature_dictionary is not None:
                 modality = "WMH" if key == "wmh_atlas" else "GM"
                 rows = feature_dictionary[feature_dictionary.modality.str.upper() == modality]
-                required = set(rows.atlas_index.astype(int))
+                required = {label for row in rows.itertuples(index=False) for label in source_atlas_labels(row)}
                 absent = required - set(np.unique(data).astype(int))
                 if absent:
                     raise ValueError(f"{key} lacks feature atlas labels: {sorted(absent)}")
@@ -79,6 +80,19 @@ def display_arrays(cfg: dict, modality: str) -> tuple[np.ndarray, np.ndarray]:
     if atlas.shape != background.shape or not np.allclose(atlas.affine, background.affine):
         atlas = resample_from_to(atlas, background, order=0)
     return background.get_fdata(dtype=np.float32), np.rint(atlas.get_fdata()).astype(np.int16)
+
+
+def project_model_atlas(atlas: np.ndarray, dictionary: pd.DataFrame, modality: str) -> np.ndarray:
+    """按冻结字典将原图谱映射到模型编号；并集赋同值，排除ROI保持0。"""
+    result = np.zeros(atlas.shape, dtype=np.int16)
+    used = set()
+    for row in dictionary[dictionary.modality == modality].itertuples(index=False):
+        labels = source_atlas_labels(row)
+        if used.intersection(labels):
+            raise ValueError("不同模型区域不能共享原图谱标签")
+        used.update(labels)
+        result[np.isin(atlas, labels)] = int(row.atlas_index)
+    return result
 
 
 def prepare_gm_display_atlas(cfg: dict) -> dict:

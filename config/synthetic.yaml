@@ -9,6 +9,11 @@ cohorts:
 runtime:
   profile: synthetic_integration
   blas_threads: 1
+# 合成三维夹具没有真实LS排除证据，不继承正式队列的特征排除项。
+feature_selection:
+  expected_model_features: 40
+  exclude: []
+  merge: []
 model:
   k_max: 2
   folds: 2

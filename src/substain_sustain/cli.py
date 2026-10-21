@@ -65,6 +65,25 @@ def doctor(cfg: dict) -> dict:
             checks["errors"].append(str(exc))
     else:
         checks["errors"].append("缺少vendor/manifest.json")
+    # 启动前明示生效的特征方案，防止旧本地配置悄悄覆盖最终合并来源。
+    try:
+        import pandas as pd
+        from .ingest import load_mapping
+        from .feature_selection import model_dictionary, model_gm_mapping, selection_policy
+        raw_mapping, raw_dictionary = load_mapping(Path(cfg["paths"]["mapping"]))
+        policy = selection_policy(cfg)
+        active = model_dictionary(raw_dictionary, policy)
+        checks["analysis_features"] = {"raw_features": len(raw_dictionary), "model_features": len(active),
+            "by_modality": active.modality.value_counts().to_dict(),
+            "events": len(active) * len(cfg["model"]["z_vals"]), "merge": policy["merge"],
+            "exclude": policy["exclude"], "output_dir": cfg["output_dir"]}
+        if policy["merge"] and cfg["paths"].get("model_mapping"):
+            expected = model_gm_mapping(raw_mapping, active, {"merged": policy["merge"]}).astype(str)
+            actual = pd.read_csv(cfg["paths"]["model_mapping"], sep="\t").astype(str)
+            if not expected.equals(actual):
+                raise ValueError("模型GM映射与当前feature_selection.merge不一致")
+    except (OSError, ValueError, KeyError) as exc:
+        checks["errors"].append("特征方案核验失败：" + str(exc))
     checks["software_ready"] = not checks["errors"]
     checks["cohort_paths_ready"] = all(
         (("input_bundle" in values) or {"derivatives", "participants"}.issubset(values))

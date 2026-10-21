@@ -176,6 +176,85 @@ def test_relative_feature_pointer_uses_explicit_source_root(tmp_path):
     assert len(read_tsv(tmp_path / "run/inputs/LS.tsv")) == 1
 
 
+def test_relocated_pointers_use_new_subject_tree_and_preserve_original_json(tmp_path):
+    cfg = config_for(tmp_path / "source")
+    spec = cfg["cohorts"]["C3"]
+    root = Path(spec["derivatives"])
+    originals = {}
+    for stage in ("wmh", "t1"):
+        path = root / f"sub-0001/status/{stage}.json"
+        mutate_json(path, lambda value, stage=stage: value["details"].update(
+            feature_json=f"/old/workstation/derivatives/sub-0001/{stage}/{stage}_features.json"))
+        originals[path] = path.read_bytes()
+    before = run_ingest(cfg, tmp_path / "before")
+    assert before["cohorts"]["C3"]["included"] == 0
+    spec["relocate_feature_pointers"] = True
+    after = run_ingest(cfg, tmp_path / "after")
+    assert after["cohorts"]["C3"]["included"] == 1
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    with gzip.open(tmp_path / "after/inputs/C3_raw_records.jsonl.gz", "rt") as stream:
+        record = json.loads(stream.readline())
+    resolution = record["feature_pointer_resolution"]["wmh"]
+    assert resolution["recorded"].startswith("/old/workstation/")
+    assert resolution["resolved"] == str(root / "sub-0001/wmh/wmh_features.json")
+    assert resolution["relocated"] is True
+
+
+@pytest.mark.parametrize("pointer", [
+    "/old/sub-OTHER/wmh/wmh_features.json", "/old/sub-0001/../other.json",
+    "/old/sub-0001/sub-0001/wmh.json", "/old/sub-0001/wmh.nii.gz",
+])
+def test_unsafe_relocation_is_excluded_not_guessed(tmp_path, pointer):
+    cfg = config_for(tmp_path / "source")
+    spec = cfg["cohorts"]["C3"]
+    spec["relocate_feature_pointers"] = True
+    mutate_json(Path(spec["derivatives"]) / "sub-0001/status/wmh.json",
+                lambda value: value["details"].update(feature_json=pointer))
+    run_ingest(cfg, tmp_path / "run")
+    audit = read_tsv(tmp_path / "run/inputs/C3_audit.tsv")
+    assert audit.reason.tolist() == ["unsafe_relocated_pointer"]
+
+
+def test_relocated_json_subject_identity_is_still_checked(tmp_path):
+    cfg = config_for(tmp_path / "source")
+    spec = cfg["cohorts"]["C3"]
+    spec["relocate_feature_pointers"] = True
+    mutate_json(Path(spec["derivatives"]) / "sub-0001/wmh/wmh_features.json",
+                lambda value: value.update(participant_id="OTHER"))
+    run_ingest(cfg, tmp_path / "run")
+    assert read_tsv(tmp_path / "run/inputs/C3_audit.tsv").reason.tolist() == ["feature_identity_mismatch"]
+
+
+def test_relocated_source_never_falls_back_to_existing_old_copy(tmp_path):
+    """两份副本都存在时，显式迁移模式只能使用新的配置根目录。"""
+    import shutil
+    cfg = config_for(tmp_path / "source")
+    spec = cfg["cohorts"]["C3"]
+    root = Path(spec["derivatives"])
+    old = tmp_path / "old/sub-0001/wmh/wmh_features.json"
+    old.parent.mkdir(parents=True)
+    shutil.copyfile(root / "sub-0001/wmh/wmh_features.json", old)
+    mutate_json(old, lambda value: value.update(participant_id="WRONG_OLD_COPY"))
+    mutate_json(root / "sub-0001/status/wmh.json", lambda value: value["details"].update(feature_json=str(old)))
+    spec["relocate_feature_pointers"] = True
+    result = run_ingest(cfg, tmp_path / "run")
+    assert result["cohorts"]["C3"]["included"] == 1
+
+
+def test_relocated_pointer_rejects_symlink_escape(tmp_path):
+    cfg = config_for(tmp_path / "source")
+    spec = cfg["cohorts"]["C3"]
+    root = Path(spec["derivatives"])
+    external = tmp_path / "outside.json"
+    external.write_text('{}')
+    pointer = root / "sub-0001/escape.json"
+    pointer.symlink_to(external)
+    mutate_json(root / "sub-0001/status/wmh.json", lambda value: value["details"].update(feature_json=str(pointer)))
+    spec["relocate_feature_pointers"] = True
+    run_ingest(cfg, tmp_path / "run")
+    assert read_tsv(tmp_path / "run/inputs/C3_audit.tsv").reason.tolist() == ["unsafe_relocated_pointer"]
+
+
 def test_disabled_required_stage_is_rejected(tmp_path):
     cfg = config_for(tmp_path / "source")
     cfg["ingest"] = {"required_stages": ["wmh", "t1", "qc"]}

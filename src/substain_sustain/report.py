@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .assets import display_arrays, file_sha256, validate_assets
+from .feature_selection import frozen_dictionary, source_atlas_labels
 
 DEFAULTS = {
     "formats": ["png", "svg", "tiff"], "raster_dpi": 600, "preview_dpi": 160,
@@ -339,7 +340,7 @@ def _plot_spatial(writer: ReportWriter, cfg: dict, model: dict, dictionary: pd.D
                 values = table[table.stage == stage].set_index("feature_id").mean_z
                 volume = np.full(atlas.shape, np.nan, dtype=np.float32)
                 for region in regions.itertuples(index=False):
-                    volume[atlas == int(region.atlas_index)] = values[region.feature_id]
+                    volume[np.isin(atlas, source_atlas_labels(region))] = values[region.feature_id]
                 for col, plane in enumerate(slices):
                     ax = axes[row, col]
                     ax.imshow(background[:, :, plane].T, origin="lower", cmap="gray")
@@ -463,6 +464,23 @@ def _plot_age(writer: ReportWriter, cfg: dict, output: Path) -> None:
 
 
 # -------- 静态报告发布入口 --------
+def _excluded_raw_table(output: Path, selection: dict) -> pd.DataFrame:
+    """排除区域仅描述原始mL，绝不伪造z或分期；GB分布不参与排除决策。"""
+    rows = []
+    low, high = selection["age_support"]
+    for cohort in ("LS", "C3", "GB"):
+        frame = _read(output / "inputs" / f"{cohort}.tsv")
+        for scope, group in (("all_ages", frame), ("primary", frame.loc[frame.age.between(low, high)])):
+            for item in selection["excluded"]:
+                values = group[item["feature_id"]].to_numpy(dtype=float)
+                rows.append({"cohort": cohort, "scope": scope, "feature_id": item["feature_id"],
+                             "n": len(values), "n_zero": int(np.sum(values == 0)),
+                             "n_nonzero": int(np.sum(values != 0)),
+                             "max_raw_ml": float(values.max()) if len(values) else None,
+                             "reason": item["reason"], "used_for_model": False})
+    return pd.DataFrame(rows)
+
+
 def run_report(cfg: dict, output: Path, bundle_only: bool = False) -> dict:
     """读取冻结结果生成报告；正式缺失文件时写明未完成并失败。"""
     output = Path(output)
@@ -496,7 +514,7 @@ def run_report(cfg: dict, output: Path, bundle_only: bool = False) -> dict:
         if settings["strict"] or not synthetic:
             raise FileNotFoundError("Report inputs are incomplete: " + ", ".join(missing))
         return summary
-    dictionary = _read(output / "inputs/feature_dictionary.tsv")
+    dictionary = frozen_dictionary(output, cfg)
     required_columns = {"feature_id", "label", "modality", "atlas_index"}
     if not required_columns.issubset(dictionary.columns) or dictionary.feature_id.duplicated().any():
         raise ValueError("Invalid feature dictionary for reporting")
@@ -559,6 +577,29 @@ def run_report(cfg: dict, output: Path, bundle_only: bool = False) -> dict:
                      ("Selection status", fit_summary.get("selection_status", "see selection.json")),
                      ("Features", len(dictionary)), ("Formal cohort findings", "No — synthetic data" if synthetic else "Interpret with QC and calibration diagnostics")]
     overview = '<table><tbody>' + ''.join('<tr><th style="text-align:left;padding-right:24px">' + html.escape(str(key)) + '</th><td>' + html.escape(str(value)) + '</td></tr>' for key, value in evidence_rows) + '</tbody></table>'
+    selection_path = output / "reference/feature_selection.json"
+    exclusion_table_path = None
+    if selection_path.is_file():
+        selection = _json(selection_path)
+        if selection.get("merged"):
+            overview += '<p class="notice">GM regions are merged before normalization: sum source volumes (mL), '
+            overview += 'then log-transform and fit the LS reference. No z scores are averaged or summed.</p><ul>'
+            for item in selection["merged"]:
+                overview += '<li>' + html.escape(item["feature_id"] + ' = ' + ' + '.join(item["source_features"])) + '</li>'
+            overview += '</ul><p>Source atlas labels and model ROI numbers are frozen in the model dictionary.</p>'
+        if selection["excluded"]:
+            overview += '<p class="notice">Raw inputs retain all 40 features. The model uses ' + str(len(dictionary))
+            overview += ' features. Explicit exclusions based only on the LS reference:</p><ul>'
+            for item in selection["excluded"]:
+                overview += '<li>' + html.escape(item["feature_id"] + ': ' + item["reason"])
+                overview += f' (LS primary n={item["ls_primary_n"]}, nonzero=0)</li>'
+            overview += '</ul><p>Excluded ROIs remain uncolored; they do not represent normal z=0. '
+            overview += 'Raw values are retained for descriptive reporting and are not staged.</p>'
+            table = _excluded_raw_table(output, selection)
+            exclusion_table_path = folder / "tables/00_excluded_raw_features.tsv"
+            table.to_csv(exclusion_table_path, sep="\t", index=False, float_format="%.10g")
+            overview += table.drop(columns=["reason", "used_for_model"]).to_html(index=False, escape=True)
+            overview += '<p><a href="tables/00_excluded_raw_features.tsv">Excluded feature raw-volume summary TSV</a></p>'
     if fit_summary.get("selection_status") == "boundary_optimum":
         overview += '<p class="notice">The selected subtype count is at the upper candidate boundary. This boundary result must be considered before scientific interpretation.</p>'
     document = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -567,6 +608,9 @@ def run_report(cfg: dict, output: Path, bundle_only: bool = False) -> dict:
     document += '<footer>All figures are regenerated from saved numerical sources and public display atlases. This report loads no remote scripts, fonts, or assets. Full-chain posterior files remain in the analysis archive.</footer></html>'
     (folder / "index.html").write_text(document, encoding="utf-8")
     artifacts = []
+    if exclusion_table_path is not None:
+        artifacts.append({"path": exclusion_table_path.relative_to(folder).as_posix(),
+                          "sha256": file_sha256(exclusion_table_path), "bytes": exclusion_table_path.stat().st_size})
     for item in writer.items:
         for relative in [*item["files"], item["table"]]:
             path = folder / relative

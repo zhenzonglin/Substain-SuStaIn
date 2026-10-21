@@ -149,6 +149,85 @@ def test_missing_crossfold_evidence_does_not_claim_complete(report_case):
     assert json.loads((output / "report/summary.json").read_text())["status"] == "incomplete"
 
 
+def test_38_feature_report_and_offline_bundle_preserve_excluded_raw_values(report_case, tmp_path):
+    """38维展示夹具验证114事件与离线重画；数值为合成，不声称正式拟合结果。"""
+    from substain_sustain.config import load_config
+    from substain_sustain.feature_selection import select_for_reference, model_frame
+    from substain_sustain.ingest import atomic_json, atomic_tsv, load_mapping, sha256_file
+    cfg, output = report_case
+    cfg["report"].update(raster_dpi=600, preview_dpi=100, figure_width=10, figure_height=6, font_size=8)
+    root = Path(__file__).resolve().parents[1]
+    _, raw = load_mapping(root / "resources/mappings/muse_gm_macro20_v1.tsv")
+    cfg["feature_selection"] = load_config(root / "config/analysis.yaml")["feature_selection"]
+    excluded = "wmh_basal_ganglia_layer4_ml"
+    for cohort in ("LS", "C3", "GB"):
+        frame = pd.read_csv(output / f"inputs/{cohort}.tsv", sep="\t", dtype={"participant_id": str})
+        frame = frame.drop(columns=["wmh_a", "wmh_b", "gm_a", "gm_b"])
+        for i, name in enumerate(raw.feature_id):
+            frame[name] = np.arange(len(frame)) * .1 + i * .03 + .1
+        if cohort == "LS":
+            frame[excluded] = 0.0
+            selected, selection = select_for_reference(raw, frame.loc[frame.age.between(50, 75)], cfg)
+        atomic_tsv(output / f"inputs/{cohort}.tsv", frame)
+        z = model_frame(frame, selection)
+        atomic_tsv(output / f"reference/{cohort}_z.tsv", z)
+        atomic_tsv(output / f"reference/{cohort}_primary_z.tsv", z.loc[z.age.between(50, 75)])
+        if cohort == "LS":
+            atomic_tsv(output / "reference/LS_oof_z.tsv", z)
+        else:
+            directory = output / ("model/fit" if cohort == "C3" else "validation")
+            for scope in ("primary", "all"):
+                assignments = pd.read_csv(directory / f"assignments_{cohort}_{scope}.tsv", sep="\t")
+                n = len(assignments)
+                np.savez_compressed(directory / f"posterior_{cohort}_{scope}.npz",
+                                    posterior_joint=np.ones((n, 115, 2)) / 230,
+                                    posterior_subtype=np.ones((n, 2)) / 2,
+                                    posterior_stage=np.ones((n, 115)) / 115,
+                                    subject_keys=assignments.subject_key.to_numpy(dtype=str))
+    atomic_tsv(output / "inputs/feature_dictionary.tsv", raw)
+    atomic_tsv(output / "reference/feature_dictionary.tsv", selected)
+    atomic_json(output / "reference/feature_selection.json", selection)
+    atomic_json(output / "reference/model.json", {"settings": cfg["reference"],
+                "feature_ids": selected.feature_id.tolist(), "feature_selection": selection})
+    atomic_json(output / "reference/manifest.json", {"files": {
+        name: sha256_file(output / "reference" / name)
+        for name in ("feature_selection.json", "feature_dictionary.tsv")}})
+    atomic_tsv(output / "reference/diagnostics.tsv", pd.DataFrame({
+        "feature_id": selected.feature_id, "split": "LS_oof", "mean_z": 0, "sd_z": 1,
+        "coverage_95": .95, "correlation_age": 0, "correlation_sex": 0, "correlation_log_icv": 0}))
+    sequence = np.arange(114).reshape(3, 38)
+    samples = np.empty((2, 114, 4), dtype=int)
+    for subtype in range(2):
+        for draw in range(4):
+            samples[subtype, :, draw] = np.roll(sequence, subtype + draw % 2, axis=1).ravel()
+    np.savez_compressed(output / "model/fit/selected_model.npz", samples_sequence=samples,
+                        samples_f=np.ones((2, 4)) / 2, samples_likelihood=np.ones((4, 1)),
+                        subtype_order=np.arange(2), Z_vals=np.tile([1, 2, 3], (38, 1)), Z_max=np.ones(38) * 5,
+                        feature_ids=selected.feature_id.to_numpy(dtype=str), labels=selected.label.to_numpy(dtype=str))
+    shutil.copyfile(output / "model/fit/selected_model.npz", output / "model/fit/cv_display.npz")
+    atlas = (np.arange(1728).reshape(12, 12, 12) % 21).astype(np.int16)
+    for key in ("wmh_atlas", "gm_atlas"):
+        nib.save(nib.Nifti1Image(atlas, np.eye(4)), cfg["assets"][key])
+    write_asset_manifest(cfg["assets"], Path(cfg["assets"]["manifest"]), "synthetic 38-feature display fixture")
+    report = run_report(cfg, output)
+    assert report["figures"] == 17
+    html = (output / "report/index.html").read_text()
+    assert "model uses 38 features" in html and "normal z=0" in html
+    descriptions = pd.read_csv(output / "report/tables/00_excluded_raw_features.tsv", sep="\t")
+    assert len(descriptions) == 6
+    assert descriptions.loc[descriptions.cohort == "LS", "n_nonzero"].eq(0).all()
+    assert descriptions.loc[descriptions.cohort == "GB", "n_nonzero"].gt(0).all()
+    spatial = pd.read_csv(output / "report/tables/05_spatial_wmh_subtype_01.tsv", sep="\t")
+    assert spatial.feature_id.nunique() == 19 and excluded not in set(spatial.feature_id)
+    bundle = tmp_path / "38-feature-display.tar.gz"
+    create_bundle(cfg, output, bundle)
+    shutil.rmtree(output)
+    shutil.rmtree(Path(cfg["assets"]["manifest"]).parent)
+    receipt = verify_bundle(bundle)
+    assert receipt["status"] == "pass" and receipt["network_disabled"] is True
+    assert receipt["tables_verified"] == 18
+
+
 def test_display_trajectory_uses_official_midpoint_stage_convention():
     model = {"samples_sequence": np.arange(3).reshape(1, 3, 1), "Z_vals": np.ones((3, 1)),
              "Z_max": np.ones(3) * 3, "feature_ids": np.array(["a", "b", "c"])}

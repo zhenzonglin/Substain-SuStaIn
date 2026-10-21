@@ -1,6 +1,6 @@
 # LS–C3–GB WMH/GM SuStaIn
 
-从已经完成的WMH和GM分割结果，建立LS健康参考、C3发现模型和GB冻结验证。主模型使用50–75岁参与者、WMH20＋纯GM20，自动质控通过即可入模，不进行站点校正。所有科研参数和输入路径均在 `config/`；模块按功能分区并有中文注释。
+从已经完成的WMH和GM分割结果，建立LS健康参考、C3发现模型和GB冻结验证。原始输入保留WMH20＋纯GM20；主模型使用50–75岁参与者、WMH19＋纯GM19，共38维。WMH排除LS全零的`wmh_basal_ganglia_layer4_ml`；GM将原17纹状体–苍白球与原19基底前脑的mL体积相加，保留原16丘脑独立，再进行log和LS参考标准化。自动质控通过即可入模，不进行站点校正。所有科研参数和输入路径均在 `config/`；模块按功能分区并有中文注释。
 
 **软件已提供完整分析与报告入口。仓库不含患者数据，技术测试不代表真实队列已完成建模。**
 
@@ -41,7 +41,7 @@ WMH图谱优先读取已有分割项目；缺失时从配置指定的GitHub固�
 
 ## 正式执行
 
-默认主规格：40维、z阈值1/2/3、K=1–6、C3十折、25起点、CV每模型10万次MCMC、主模型100万次、两个独立稳定性种子各10万次。完整官方后验可能较大，运行前检查剩余磁盘与配置的内存限额。
+默认主规格：38维、114个事件、z阈值1/2/3、K=1–6、C3十折、25起点、CV每模型10万次MCMC、主模型100万次、两个独立稳定性种子各10万次。`feature_selection`明确记录排除依据，每次仍验证LS主年龄范围内该特征全零；其他特征退化仍会停止。原始40维不删列，GB不参与特征选择。完整官方后验可能较大，运行前检查剩余磁盘与配置的内存限额。
 
 ```bash
 bash scripts/run.sh ingest --config config/local.yaml
@@ -68,7 +68,7 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 在另一终端运行，`--config`必须使用正式启动时的同一份配置：
 
 ```bash
-.venv/bin/python scripts/monitor.py --config config/local.formal.yaml
+.venv/bin/python scripts/monitor.py --config config/local.38.yaml
 ```
 
 每5秒显示八个阶段的完成、运行、失败、待运行或中断状态；同时显示C3逐折完成情况、主种子/稳定性种子的缓存写出情况、分析进程树CPU和RSS内存，以及整机CPU和可用内存。CPU合计100%代表一个逻辑核心；RSS合计可能重复计算共享页。按Ctrl+C只退出监控。只打印一次可加`--once`。
@@ -80,12 +80,24 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 若`reference`报告“LS残差SD低于设定阈值”，先执行只读诊断：
 
 ```bash
-.venv/bin/python scripts/diagnose_reference.py --config config/local.formal.yaml
+.venv/bin/python scripts/diagnose_reference.py --config config/local.38.yaml
 ```
 
 该命令核对已导入输入的哈希，使用同一自然样条和OLS检查全体合格LS及五折训练子集，并汇总问题特征在三队列中的零值/非零值数量。它还对照保存的LS原始WMH JSON快照与导入表，输出均为汇总数字。诊断参数在`config/reference_diagnostics.yaml`；命令不修改输入、参考参数或状态，不启动SuStaIn。
 
 全零、常量和仅某个训练折退化需要分别处理。若LS没有可估计的残差尺度，当前LS残差z定义无法用于该特征；不能通过把SD阈值改为零、手工加小数或借用C3/GB的SD继续正式拟合。先核实数据，再明确记录任何特征或参考方法的变更。
+
+仅检查导入人数和排除原因，可加`--inputs-only`。原始状态标记pass并不保证迁移后原路径仍然可读。
+
+## 手动迁移后的C3与38维配置
+
+已有`config/local.yaml`的工作站，可复制`config/formal38_migrated.example.yaml`为`config/local.38.yaml`；该文件继承LS/GB及其他本机设置，C3指向已确认的`/mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3/derivatives/substain_features`，结果使用新的`runs/formal_LS_C3_GB_38_v1`目录。
+
+最终GM19编号：1–16保持原编号；新17=原17+原19；18仍为海马–杏仁核；新19=原20小脑皮层–蚓部。脑干与ventralDC均不加入。不能复用旧40维、39维或此前“丘脑+纹状体”草稿的参考/CV结果。完整更新、启动和监控命令见[38维正式部署](docs/FORMAL38_ZH.md)。
+
+`cohorts.C3.relocate_feature_pointers: true`保留状态指针中`sub-本例ID/`之后的完整相对路径，在配置的derivatives内定位对应文件。即使旧路径仍存在，也使用新副本。它不会遍历猜测文件名，不修改原始JSON；指针越界、ID不一致、实际文件缺失或权限不足继续记录排除。原路径、实际读取路径和文件哈希一并保存。真实阶段失败仍不能入模。
+
+更换配置后重新运行`ingest`只会读取已有分割结果，不重新分割。检查C3导入人数和排除原因后，再从`reference`继续；空队列现在会在参考拟合前明确停止。
 
 ## 无需搬运原始MRI
 
@@ -100,7 +112,7 @@ bash scripts/run.sh export-inputs --config config/local.yaml --cohort C3 --desti
 ## 正式结果保留
 
 - `inputs/`：完整导入清单、合格特征、排除原因和来源快照。
-- `reference/`：LS参考参数、OOF诊断、冻结变换后的全龄/主分析矩阵。
+- `reference/`：LS参考参数、OOF诊断、38维模型字典、排除与合并清单、GM119→GM19映射、三队列38维原始体积，以及冻结变换后的全龄/主分析矩阵。
 - `model/cv/`：分折、CVIC、逐折似然、全部官方模型和序列一致性。
 - `model/fit/`：C3主模型、稳定性复核、完整MCMC链、展示抽样与个体概率。
 - `validation/`：冻结GB主分析及全年龄应用结果。

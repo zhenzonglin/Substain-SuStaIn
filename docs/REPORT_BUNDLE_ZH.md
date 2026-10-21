@@ -25,6 +25,8 @@ stage 0显示为“Undifferentiated”；阶段不解释为疾病年限或进展
 
 `assets` 配置包含WMH20图谱、GM20图谱、公开背景及SHA256清单。仅需在开发端对公开模板进行一次NiChart DLMUSE处理。患者影像不进入展示资源。
 
+当前模型38维，原始输入40维。报告从`reference/feature_dictionary.tsv`读取冻结特征；`source_atlas_indices`保留来源图谱标签，`atlas_index`记录模型编号。GM17的新模型值同时绘制到原GM17和原GM19的并集；丘脑保持独立，原GM20小脑对应新GM19。WMH标签4在脑图中留空，不显示为z=0。HTML说明原始体积先相加、再log及LS标准化的合并方法，并列出排除理由与LS证据；`tables/00_excluded_raw_features.tsv`保存排除区域的三队列原始体积汇总。展示包保留原始40维、38维模型字典、GM119→GM19映射、合并记录及重画代码；无需新图谱下载或重新分割。
+
 准备好配置中的公开模板分割后执行：
 
 ```bash

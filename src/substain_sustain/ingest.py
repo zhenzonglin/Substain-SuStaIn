@@ -93,9 +93,11 @@ def guard_output(cfg: dict, output: Path) -> None:
             is_directory = key in {"derivatives", "input_bundle"} or source.is_dir()
             if output == source or _within(source, output) or (is_directory and _within(output, source)):
                 raise ValueError(f"输出与只读输入重叠: {output} / {source}")
-    mapping = Path(cfg["paths"]["mapping"]).resolve()
-    if output == mapping or _within(mapping, output):
-        raise ValueError(f"输出目录包含输入mapping: {output}")
+    for key in ("mapping", "model_mapping"):
+        if cfg["paths"].get(key):
+            mapping = Path(cfg["paths"][key]).resolve()
+            if output == mapping or _within(mapping, output):
+                raise ValueError(f"输出目录包含输入{key}: {output}")
 
 
 def _stamp(path: Path) -> tuple[int, int, int, int]:
@@ -288,9 +290,25 @@ def _manual_states(spec: dict, cohort: str, evidence: dict) -> dict:
     return {row["participant_id"]: row for row in frame.to_dict("records")} if field else {}
 
 
-def _pointer(raw: Any, spec: dict) -> Path:
+def _pointer(raw: Any, spec: dict, participant_id: str | None = None) -> Path:
     if not isinstance(raw, str) or not raw:
         raise InputError("missing_feature_pointer", "status.details.feature_json")
+    # 手动迁移后的显式模式：保留sub-ID内的相对路径，只替换外部根目录。
+    # 不搜索文件、不更改状态JSON，也不回退到仍可访问的旧副本。
+    relocate = spec.get("relocate_feature_pointers", False)
+    if not isinstance(relocate, bool):
+        raise ValueError("relocate_feature_pointers必须是布尔值")
+    if relocate:
+        parts = Path(raw).parts
+        anchor = f"sub-{participant_id}"
+        if not participant_id or parts.count(anchor) != 1 or ".." in parts or Path(raw).suffix != ".json":
+            raise InputError("unsafe_relocated_pointer", "迁移指针须含唯一的本例sub-ID及JSON文件，不能含..")
+        root = Path(spec["derivatives"]).resolve()
+        subject = root / anchor
+        candidate = (root / Path(*parts[parts.index(anchor):])).resolve()
+        if not _within(candidate, subject) or not _within(candidate, root):
+            raise InputError("unsafe_relocated_pointer", "迁移目标必须位于配置derivatives内的本例目录")
+        return candidate
     for old, new in spec.get("path_prefix_map", {}).items():
         prefix = str(old).rstrip("/")
         if raw == prefix or raw.startswith(prefix + "/"):
@@ -342,7 +360,12 @@ def _collect_source(cfg: dict, cohort: str, mapping: pd.DataFrame, dictionary: p
                 if not isinstance(state.get("details"), dict):
                     raise InputError("invalid_status_details", stage)
             for stage in ("wmh", "t1"):
-                feature = _read_json(_pointer(snapshot["statuses"][stage]["details"].get("feature_json"), spec), evidence)
+                recorded_pointer = snapshot["statuses"][stage]["details"].get("feature_json")
+                resolved_pointer = _pointer(recorded_pointer, spec, person)
+                snapshot.setdefault("feature_pointer_resolution", {})[stage] = {
+                    "recorded": recorded_pointer, "resolved": str(resolved_pointer),
+                    "relocated": spec.get("relocate_feature_pointers", False)}
+                feature = _read_json(resolved_pointer, evidence)
                 snapshot["features"][stage] = feature
                 if feature.get("participant_id") != person:
                     raise InputError("feature_identity_mismatch", f"{person}/{stage}")

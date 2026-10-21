@@ -1,18 +1,21 @@
 # ===== 一、项目和所有输入路径 =====
 # 相对路径均以本文件的project_dir为根；可用extends叠加本机配置。
 project_dir: ..
-output_dir: runs/formal_v1
+output_dir: runs/formal_LS_C3_GB_38_v1
 paths:
   mapping: resources/mappings/muse_gm_macro20_v1.tsv
+  model_mapping: resources/mappings/muse_gm_macro19_striatopallidal_basalforebrain_v1.tsv
 cohorts:
   LS:
     derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_LS/derivatives
     participants: /data02/linzhenzong/Substain_GB/config/participants_LS.tsv
     metadata: null  # participants已含age/sex；若另有元数据，在local.yaml配置实际路径。
   C3:
-    derivatives: /data/usersdir/linzhenzong/Substain/derivatives/substain_features
-    participants: /data/usersdir/linzhenzong/Substain/config/participants.tsv
+    derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3/derivatives/substain_features
+    participants: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3/participants.tsv
     metadata: null
+    source_root: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_C3
+    relocate_feature_pointers: true
   GB:
     derivatives: /mnt/share/GPUStore2/usersdir/linzhenzong/Sustain_GB/derivatives/substain_features
     participants: /data02/linzhenzong/Substain_GB/config/participants_gb.tsv
@@ -28,7 +31,25 @@ ingest:
   # 人工审核只保留原值，不作入模门槛。
   manual_qc_required: false
 
-# ===== 三、LS独立参考；不含站点效应 =====
+# ===== 三、明确的模型特征选择：原始40维完整保留 =====
+# 最终确认：WMH排除LS全零第4区；GM17+19先加原始体积，丘脑GM16保持独立。
+# 每次拟合仍核实LS主年龄范围内全零；不自动增加排除项、不使用C3/GB选特征。
+feature_selection:
+  expected_model_features: 38
+  exclude:
+    - feature_id: wmh_basal_ganglia_layer4_ml
+      criterion: LS_primary_all_zero
+      reason: LS主年龄范围内该特征全部为零，无法估计LS残差标准差；保留原始体积但不进入模型。
+  merge:
+    - feature_id: gm_striatopallidal_basal_forebrain_ml
+      source_features: [gm_striatopallidal_ml, gm_basal_forebrain_ml]
+      operation: sum_raw_ml
+      label: Striatopallidal and basal forebrain
+      label_cn: 纹状体-苍白球-基底前脑
+      mapping_version: muse_gm_macro19_striatopallidal_basalforebrain_v1
+      reason: 用户最终指定合并原GM17纹状体-苍白球和GM19基底前脑，保留GM16丘脑独立；先合并mL体积，再拟合LS参考。
+
+# ===== 四、LS独立参考；不含站点效应 =====
 reference:
   age_min: 50
   age_max: 75
@@ -44,7 +65,7 @@ reference:
   diagnostic_z_thresholds: [1, 2, 3]
   diagnostic_coverage_z: 1.96
 
-# ===== 四、官方SuStaIn配置 =====
+# ===== 五、官方SuStaIn配置 =====
 model:
   k_max: 6
   folds: 10
@@ -63,7 +84,7 @@ model:
   # burn-in仅用于本项目个体后验与展示抽样；官方CVIC仍遵循上游全链规则。
   workers: 4
 
-# ===== 五、资源与执行身份 =====
+# ===== 六、资源与执行身份 =====
 runtime:
   profile: formal
   max_memory_fraction: 0.5
@@ -72,7 +93,7 @@ runtime:
   memory_limit_gb: null
   blas_threads: 1
 
-# ===== 六、空间展示资源与公开模板制图 =====
+# ===== 七、空间展示资源与公开模板制图 =====
 assets:
   wmh_atlas: resources/display/wmh20.nii.gz
   gm_atlas: resources/display/gm20.nii.gz
@@ -95,7 +116,7 @@ assets:
   template_min_free_memory_gb: 16
   label_interpolation: nearest
 
-# ===== 七、报告展示参数；所有标题与图注说明ROI模型而非体素统计 =====
+# ===== 八、报告展示参数；所有标题与图注说明ROI模型而非体素统计 =====
 report:
   formats: [png, svg, tiff]
   font_family: DejaVu Sans
@@ -119,7 +140,7 @@ report:
   cohort_colors: {LS: "#5A7C65", C3: "#32699B", GB: "#B85F45"}
   strict: true
 
-# ===== 八、可移动展示包 =====
+# ===== 九、可移动展示包 =====
 bundle:
   compression: gz
   include_full_posterior: true

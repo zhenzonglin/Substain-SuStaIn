@@ -18,6 +18,36 @@ from substain_sustain.ingest import read_tsv, sha256_file, validate_feature_dict
 from substain_sustain.reference import _fit_design, _numeric_frame, _settings, _transformed
 
 
+# ===== 导入审计：只读已保存的排除记录，示例替换原始ID =====
+def input_audit(cfg: dict) -> dict:
+    source = Path(cfg["output_dir"]) / "inputs"
+    result = {}
+    for cohort in ("LS", "C3", "GB"):
+        path = source / f"{cohort}_audit.tsv"
+        if not path.is_file():
+            result[cohort] = {"error": "缺少导入审计文件"}
+            continue
+        frame = read_tsv(path)
+        included = frame.included.str.lower().isin(["true", "1"])
+        excluded = frame.loc[~included]
+        examples = {}
+        for reason, group in excluded.groupby("reason", sort=True):
+            row = group.iloc[0]
+            text = str(row.detail)
+            person = str(row.participant_id)
+            if person:
+                text = text.replace(person, "<ID>")
+            examples[str(reason)] = text
+        spec = cfg["cohorts"][cohort]
+        result[cohort] = {"roster_n": len(frame), "included_n": int(included.sum()),
+                          "excluded_n": int((~included).sum()),
+                          "reasons": excluded.reason.value_counts().to_dict(),
+                          "one_redacted_example_per_reason": examples,
+                          "configured_paths": {name: spec.get(name) for name in
+                                               ("derivatives", "participants", "metadata", "input_bundle")}}
+    return result
+
+
 # ===== 一、完全沿用当前LS设计和OLS残差口径；只返回诊断数值 =====
 def residual_summary(frame, dictionary, settings: dict, split: str) -> list[dict]:
     design, _ = _fit_design(frame, settings)
@@ -173,8 +203,12 @@ def main() -> int:
     parser.add_argument("--diagnostic-config", type=Path,
                         default=Path(__file__).resolve().parents[1] / "config/reference_diagnostics.yaml")
     parser.add_argument("--json", action="store_true", help="输出不含逐人信息的完整汇总JSON")
+    parser.add_argument("--inputs-only", action="store_true", help="仅显示三队列导入人数、排除原因和已隐藏ID的示例")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.inputs_only:
+        print(json.dumps(input_audit(cfg), ensure_ascii=False, indent=2))
+        return 0
     options = yaml.safe_load(args.diagnostic_config.read_text(encoding="utf-8"))
     if not isinstance(options["verify_ls_raw_snapshots"], bool):
         parser.error("verify_ls_raw_snapshots必须是布尔值")

@@ -21,8 +21,10 @@
 |---|---|
 | project_dir / output_dir | 工程根和本次正式结果目录 |
 | paths.mapping | 纯GM20固定映射表 |
+| paths.model_mapping | 最终GM119→GM19映射；运行时校验与合并配置一致 |
 | cohorts | 每队列derivatives、participants、可选metadata或input_bundle |
 | ingest | 自动阶段要求、年龄合法范围、性别映射、ICV一致性 |
+| feature_selection | 保留原始40维；排除WMH4，合并原GM17+GM19；expected_model_features=38 |
 | reference | LS年龄范围、样条自由度、五折、随机种子、残差SD与诊断阈值 |
 | model | K范围、十折、起点、MCMC次数、种子、事件阈值、后验/展示抽样 |
 | runtime | formal/synthetic身份、BLAS线程、并行及内存/磁盘安全系数 |
@@ -44,3 +46,13 @@
 10. 输入源、输出数据包和展示包均可能含个体ID或概率，始终留在授权工作站，不能放入GitHub。
 
 完整字段解释以analysis.yaml中文注释和各专题文档为准。代码中的稳定产物文件名是接口约定，不属于输入路径配置。
+
+## 已确认的38维与迁移配置
+
+`feature_selection.exclude`列出`feature_id`、`criterion`和`reason`。当前仅排除`wmh_basal_ganglia_layer4_ml`，依据为`LS_primary_all_zero`。程序先核验LS主年龄范围内的原始值确实全零，再冻结38维字典、理由和LS证据。不能仅改expected_model_features来绕过检查。
+
+`feature_selection.merge`完整列出来源特征、目标特征、名称、理由、映射版本和`operation: sum_raw_ml`。最终目标`gm_striatopallidal_basal_forebrain_ml`来自`gm_striatopallidal_ml + gm_basal_forebrain_ml`。先对原始mL求和，再log并拟合LS；不相加或平均旧z。丘脑保持独立。原始GM20编号在`source_atlas_indices`保留，GM19模型编号在`atlas_index`保留。
+
+`config/formal38_migrated.example.yaml`继承工作站`local.yaml`，明确上述排除项、迁移后C3路径和新输出目录。`cohorts.C3.relocate_feature_pointers: true`是显式启用的迁移模式：依据原指针中唯一的本例`sub-ID`后缀，在新的derivatives根下读取对应JSON。禁止`..`、跨受试者、非JSON及符号链接越界；仍核对JSON内participant_id。该模式不修改状态文件。未启用时继续使用原有`source_root`及`path_prefix_map`逻辑。
+
+`scripts/diagnose_reference.py --config config/local.yaml --inputs-only`读取已保存的导入审计，显示三队列名单数、纳入数、排除原因和隐藏ID的错误示例；不修改数据。
