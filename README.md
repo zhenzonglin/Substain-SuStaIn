@@ -77,6 +77,16 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 
 缓存文件数不等于通过验收的模型数；监控不加载MCMC大文件，也不推算链内进度。旧版`verify-bundle`仅在成功时写验收回执，没有失败状态记录，因此无有效回执且无活进程时显示“未验收”，不能自动区分未启动和失败。监控不是模型产物完整性验收的替代品。
 
+若`reference`报告“LS残差SD低于设定阈值”，先执行只读诊断：
+
+```bash
+.venv/bin/python scripts/diagnose_reference.py --config config/local.formal.yaml
+```
+
+该命令核对已导入输入的哈希，使用同一自然样条和OLS检查全体合格LS及五折训练子集，并汇总问题特征在三队列中的零值/非零值数量。它还对照保存的LS原始WMH JSON快照与导入表，输出均为汇总数字。诊断参数在`config/reference_diagnostics.yaml`；命令不修改输入、参考参数或状态，不启动SuStaIn。
+
+全零、常量和仅某个训练折退化需要分别处理。若LS没有可估计的残差尺度，当前LS残差z定义无法用于该特征；不能通过把SD阈值改为零、手工加小数或借用C3/GB的SD继续正式拟合。先核实数据，再明确记录任何特征或参考方法的变更。
+
 ## 无需搬运原始MRI
 
 在能访问源队列的工作站导出：

@@ -1,0 +1,6 @@
+# ===== 只读诊断配置；不改变正式参考模型、特征或阈值 =====
+# 同时检查全部40维，以下特征即使未报错也展示详情。
+focus_features: [wmh_basal_ganglia_layer4_ml]
+verify_ls_raw_snapshots: true
+comparison_rtol: 0.000000000001
+comparison_atol: 0.000000000001
