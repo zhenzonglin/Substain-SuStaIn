@@ -95,6 +95,8 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 
 最终GM19编号：1–16保持原编号；新17=原17+原19；18仍为海马–杏仁核；新19=原20小脑皮层–蚓部。脑干与ventralDC均不加入。不能复用旧40维、39维或此前“丘脑+纹状体”草稿的参考/CV结果。完整更新、启动和监控命令见[38维正式部署](docs/FORMAL38_ZH.md)。
 
+若git pull提示本地config/analysis.yaml会被覆盖，使用部署文档中的upgrade_formal38.py流程。它先保存实际生效的本机配置和原文件，再恢复模板并拉取；更新后的38维配置继承保存快照，因此保留写在analysis.yaml中的本机路径/参数。不要直接restore或reset后丢掉这些设置。
+
 `cohorts.C3.relocate_feature_pointers: true`保留状态指针中`sub-本例ID/`之后的完整相对路径，在配置的derivatives内定位对应文件。即使旧路径仍存在，也使用新副本。它不会遍历猜测文件名，不修改原始JSON；指针越界、ID不一致、实际文件缺失或权限不足继续记录排除。原路径、实际读取路径和文件哈希一并保存。真实阶段失败仍不能入模。
 
 更换配置后重新运行`ingest`只会读取已有分割结果，不重新分割。检查C3导入人数和排除原因后，再从`reference`继续；空队列现在会在参考拟合前明确停止。

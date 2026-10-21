@@ -16,16 +16,20 @@ GM合并为原始mL求和，随后log并独立拟合LS参考。完整原始40维
 
 ## 更新及导入
 
-适用于已经完成安装并有config/local.yaml的工作站。新配置继承现有LS/GB设置，单独覆盖本次修改的C3路径、特征合同与结果目录。下面的cp不覆盖已有local.38.yaml；若已经有此文件，应核对其合并来源必须为GM17+GM19。
+适用于已经完成安装并有config/local.yaml的工作站。下面先fetch取得升级脚本，因而即使手工修改过analysis.yaml、普通pull被阻止，也可执行。脚本完整备份原文件，把更新前实际生效的路径和参数保存到config/local.preserved_时间戳.yaml，再恢复受版本控制的analysis.yaml并快进更新。最终local.38.yaml继承该保存配置，覆盖最终分区、C3迁移路径与新结果目录；原local.yaml不改。已有local.38.yaml也会先备份。
 
 ```bash
-cd /data02/linzhenzong/Substain-SuStaIn
-git pull --ff-only
-cp -n config/formal38_migrated.example.yaml config/local.38.yaml
-bash scripts/run.sh doctor --config config/local.38.yaml
-bash scripts/run.sh ingest --config config/local.38.yaml
+cd /data02/linzhenzong/Substain-SuStaIn &&
+git fetch origin &&
+mkdir -p .cache &&
+git show origin/main:scripts/upgrade_formal38.py > .cache/upgrade_formal38.py &&
+.venv/bin/python .cache/upgrade_formal38.py --config config/local.yaml &&
+bash scripts/run.sh doctor --config config/local.38.yaml &&
+bash scripts/run.sh ingest --config config/local.38.yaml &&
 .venv/bin/python scripts/diagnose_reference.py --config config/local.38.yaml --inputs-only
 ```
+
+原始备份与收据位于.cache/config_upgrades/时间戳/。保留config/local.preserved_*.yaml，它是新local.38.yaml的有效继承源。若存在已暂存的analysis.yaml修改，脚本会停止以保留暂存决定；不会reset其他文件。快进失败且HEAD未改变时会恢复原analysis.yaml。
 
 C3配置：
 
