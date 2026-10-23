@@ -63,6 +63,18 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 
 该命令在独立临时目录使用包内代码、数值源和图谱重新绘制，并核对图源表哈希、PNG像素及TIFF尺寸/DPI；不依赖原MRI、原项目目录或网络。
 
+## 无sudo的独立CV计时诊断
+
+长时间没有首个缓存且无法读取调用栈时，可在另一终端运行：
+
+```bash
+.venv/bin/python scripts/probe_cv.py --config config/local.38.yaml
+```
+
+参数集中在`config/cv_probe.yaml`。探针核对冻结身份，使用原fold 0的全部C3训练数据、K=1原种子和原特征，额外启动一个低优先级单线程进程，最多测一轮EM或10分钟；每5秒显示完成的似然计算数。一轮完成后显示真实耗时、候选logL变化和顺序变化。只写`.cache/cv_probe/`，不停止旧任务、不改正式参数、官方库或缓存。探针会增加少量资源竞争。
+
+**独立探针的推进不能证明旧worker没有空转，也不能给出完整CV的剩余时间。** 它用于检验同一数据下官方计算能否完成及耗时是否很长。具体证据边界与输出说明见[CV进度诊断](docs/CV_PROGRESS_ZH.md)。
+
 ## 正式分析监控
 
 已完成导入和LS参考、当前处于交叉验证时，可将原4并行安全切换为10并行：

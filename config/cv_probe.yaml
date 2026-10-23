@@ -1,0 +1,16 @@
+# ===== 独立计时探针；不改变正式参数和正在运行的进程 =====
+output_dir: .cache/cv_probe
+# 折号和起点号均从0开始；完整使用该折C3训练样本，不抽样或降维。
+fold: 0
+startpoint: 0
+# ===== 独立诊断预算；达到上限是诊断结束，不是正式模型完成 =====
+max_em_sweeps: 1
+max_wall_seconds: 600
+heartbeat_seconds: 5
+termination_grace_seconds: 10
+# ===== 额外一个低优先级进程；保留内存余量，正式worker不变 =====
+blas_threads: 1
+nice_increment: 10
+max_memory_gb: 8
+min_available_memory_gb: 16
+memory_safety_factor: 2
