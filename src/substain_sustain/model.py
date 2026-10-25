@@ -100,6 +100,7 @@ def _guard(directory: Path, identity: dict[str, Any]) -> None:
 
 
 def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
+    from .acceleration import execution_settings
     required = [output / "inputs" / "feature_dictionary.tsv"]
     # 下游身份包含冻结的排除与GM合并方案；配置变化不能复用旧参考或旧CV。
     frozen_dictionary(output, cfg)
@@ -120,8 +121,10 @@ def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
         "upstream_source_sha256": _upstream_provenance(),
         "dependency_versions": {"python": ".".join(str(v) for v in sys.version_info[:3]),
                                 **{name: version(name) for name in ("numpy", "scipy", "pandas", "scikit-learn", "pathos", "dill", "multiprocess", "threadpoolctl")}},
-        "wrapper_source_sha256": {name: _hash(Path(__file__).with_name(name)) for name in ("model.py", "posterior.py")},
+        "wrapper_source_sha256": {name: _hash(Path(__file__).with_name(name))
+                                  for name in ("model.py", "posterior.py", "acceleration.py", "progress.py")},
         "model_config": cfg["model"], "runtime_config": cfg.get("runtime", {}),
+        "acceleration_config": execution_settings(cfg),
         "feature_selection_policy": selection_policy(cfg),
         "reference_config": cfg.get("reference", {}),
         "input_sha256": {str(p.relative_to(output)): _hash(p) for p in files + required},
@@ -172,7 +175,9 @@ def _read_z(path: Path, features: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarra
 
 
 def _settings(cfg: dict, n_features: int) -> dict:
+    from .acceleration import execution_settings
     settings = dict(cfg["model"])
+    settings["_acceleration"] = execution_settings(cfg)
     settings["reference_age_min"] = float(cfg.get("reference", {}).get("age_min", 50))
     settings["reference_age_max"] = float(cfg.get("reference", {}).get("age_max", 75))
     for name in ("k_max", "folds", "startpoints", "cv_iterations", "fit_iterations", "stability_iterations", "posterior_samples", "workers"):
@@ -203,12 +208,20 @@ def _engine(data: np.ndarray, features: pd.DataFrame, settings: dict, directory:
 
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "pickle_files").mkdir(exist_ok=True)
-    return ZscoreSustain(
+    engine = ZscoreSustain(
         data, np.tile(settings["z_vals"], (data.shape[1], 1)),
         np.repeat(settings["z_max"], data.shape[1]), features.label.tolist(),
         int(settings["startpoints"]), int(n_subtypes), int(iterations),
         str(directory), "C3", False, seed=int(seed),
     )
+    from .acceleration import build_blocked_kernel, execution_settings
+    execution = settings.get("_acceleration", execution_settings({}))
+    if execution["backend"] == "row_blocks":
+        engine._calculate_likelihood_stage = build_blocked_kernel(engine, execution["block_rows"])
+    if execution["progress_enabled"]:
+        from .progress import install_progress
+        install_progress(engine, directory, execution)
+    return engine
 
 
 def _model_seed(seed: int, fold: int, n_subtypes: int) -> int:
@@ -401,7 +414,7 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
     current = _identity(cfg, output, [output / "reference" / "C3_primary_z.tsv"], "C3_crossvalidation")
     for key in ("role", "schema_version", "upstream_commit", "reference_hash", "upstream_source_sha256",
                 "wrapper_source_sha256", "dependency_versions", "reference_config", "input_sha256",
-                "feature_selection_policy"):
+                "feature_selection_policy", "acceleration_config"):
         if saved.get(key) != current.get(key):
             raise ValueError(f"当前拟合与已完成 CV 身份不符（{key}），必须重新交叉验证。")
     # 允许仅改变最终链、稳定性和后验展示参数；CV 实际使用的参数必须相同。
@@ -428,10 +441,12 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
 
 def _inference(engine, frame: pd.DataFrame, data: np.ndarray, model: dict,
                settings: dict, destination: Path, tag: str) -> pd.DataFrame:
-    posterior = infer_posterior(engine, data, model["samples_sequence"], model["samples_f"],
-                                n_samples=int(settings["posterior_samples"]),
-                                burn_in_fraction=float(settings.get("burn_in_fraction", 0.1)),
-                                batch_size=int(settings.get("posterior_batch_size", 128)))
+    tracker = getattr(engine, "_progress_tracker", None)
+    with tracker.active("inference") if tracker else contextlib.nullcontext():
+        posterior = infer_posterior(engine, data, model["samples_sequence"], model["samples_f"],
+                                    n_samples=int(settings["posterior_samples"]),
+                                    burn_in_fraction=float(settings.get("burn_in_fraction", 0.1)),
+                                    batch_size=int(settings.get("posterior_batch_size", 128)))
     _npz(destination / f"posterior_{tag}.npz", **posterior, subject_keys=frame.subject_key.to_numpy(dtype=str))
     columns = list(META_COLUMNS)
     assigned = frame[columns].copy()
@@ -606,7 +621,7 @@ def run_validate(cfg: dict, output: Path) -> dict:
     with _lock(directory):
         identity = _identity(cfg, output, [summary_path, primary_path, output / "reference" / "GB_primary_z.tsv",
                                           output / "reference" / "GB_z.tsv"], "GB_frozen_validation")
-        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions"):
+        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions", "acceleration_config"):
             if fit_manifest.get(key) != identity.get(key):
                 raise ValueError(f"当前验证实现与冻结主模型不同（{key}），请使用原锁定环境及源码。")
         _guard(directory, identity)

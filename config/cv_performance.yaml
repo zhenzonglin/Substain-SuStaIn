@@ -1,0 +1,19 @@
+# ===== 一、独立诊断范围；不修改正在运行的正式模型 =====
+output_dir: .cache/cv_performance
+fold: 0
+startpoint: 0
+max_em_sweeps: 1
+max_wall_seconds: 1800
+heartbeat_seconds: 5
+termination_grace_seconds: 10
+# ===== 二、单个额外进程的资源限制 =====
+blas_threads: 1
+nice_increment: 10
+max_memory_gb: 8
+min_available_memory_gb: 16
+memory_safety_factor: 2
+# ===== 三、原算法与分块实现逐元素对照，不接受近似相等 =====
+block_rows: 32
+benchmark_sequences: 3
+benchmark_repeats: 2
+benchmark_seed: 20261025

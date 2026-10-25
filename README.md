@@ -41,6 +41,15 @@ WMH图谱优先读取已有分割项目；缺失时从配置指定的GitHub固�
 
 ## 正式执行
 
+正式计算默认采用32人分块似然，并记录起点、EM轮和MCMC迭代评估的真实进度。科学规格、官方EM/MCMC和固定提交不变。旧版CV缓存须经安全切换迁移：
+
+```bash
+git pull --ff-only
+.venv/bin/python scripts/switch_acceleration.py --config config/local.38.yaml --apply
+```
+
+该命令先在工作站全部C3输入上核验逐元素一致性，备份配置和缓存身份，再精准停止旧CV及其后台续跑器并自动重启。输入、LS参考及完整缓存保留；未保存的EM/MCMC需重跑。已进入fit时拒绝自动切换。[完整切换、监控与备份说明](docs/ACCELERATION_ZH.md)。
+
 默认主规格：38维、114个事件、z阈值1/2/3、K=1–6、C3十折、25起点、CV每模型10万次MCMC、主模型100万次、两个独立稳定性种子各10万次。`feature_selection`明确记录排除依据，每次仍验证LS主年龄范围内该特征全零；其他特征退化仍会停止。原始40维不删列，GB不参与特征选择。完整官方后验可能较大，运行前检查剩余磁盘与配置的内存限额。
 
 ```bash
@@ -77,7 +86,11 @@ bash scripts/run.sh verify-bundle --bundle /实际路径/sustain-display-bundle.
 
 ## 正式分析监控
 
+启用acceleration.progress_enabled后，显示当前K、优化批次、起点、EM轮、事件/候选位置、最近logL及MCMC迭代评估。心跳时间与完成的数值调用数分别记录；旧PID和延迟心跳不会被当作正常推进。
+
 已完成导入和LS参考、当前处于交叉验证时，可将原4并行安全切换为10并行：
+
+以下入口只适用于缓存已经使用当前源码、仅需改变并行数的情况。旧版本CV升级到分块和EM心跳，应使用上方switch_acceleration.py的跨版本切换入口。
 
 ```bash
 git pull --ff-only

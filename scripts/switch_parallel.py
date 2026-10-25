@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import uuid
 
 import psutil
@@ -166,11 +167,14 @@ def matching_processes(cfg):
 def stop_processes(processes, settings, verify=None):
     """先暂停协调器防止新建任务，再终止同一批进程；失败时恢复仍在暂停的进程。"""
     suspended = []
+    originally_stopped = set()
     try:
         ids = {p.pid for p in processes}
         ordered = sorted(processes, key=lambda p: p.ppid() in ids)
         for process in ordered:
             if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+                if process.status() == psutil.STATUS_STOPPED:
+                    originally_stopped.add(process.pid)
                 process.suspend()
                 suspended.append(process)
         # 暂停之后重新收集后代，防止扫描与暂停之间产生新worker。
@@ -178,9 +182,26 @@ def stop_processes(processes, settings, verify=None):
         for process in list(suspended):
             for child in process.children(recursive=True):
                 if child.pid not in known:
+                    if child.status() == psutil.STATUS_STOPPED:
+                        originally_stopped.add(child.pid)
                     child.suspend()
                     suspended.append(child)
                     known.add(child.pid)
+        # SIGSTOP可能尚在不可中断I/O后等待处理；确认暂停后才能读取稳定的备份。
+        deadline = time.monotonic() + settings.get("stop_ack_timeout_seconds", 10)
+        while True:
+            pending = []
+            for process in suspended:
+                try:
+                    if process.is_running() and process.status() not in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE):
+                        pending.append(process.pid)
+                except psutil.NoSuchProcess:
+                    pass
+            if not pending:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("未确认所有目标进程已暂停；恢复进程，不停止或迁移")
+            time.sleep(settings.get("stop_poll_seconds", 0.05))
         if verify is not None:
             verify()  # 暂停后再检查尚未转入fit；不符则finally恢复原进程。
         for process in reversed(suspended):
@@ -198,7 +219,8 @@ def stop_processes(processes, settings, verify=None):
     finally:
         for process in suspended:
             try:
-                if process.is_running() and process.status() == psutil.STATUS_STOPPED:
+                # SIGCONT也撤销尚未交付的SIGSTOP，防止I/O返回后进程意外停住。
+                if process.pid not in originally_stopped and process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
                     process.resume()
             except psutil.NoSuchProcess:
                 pass

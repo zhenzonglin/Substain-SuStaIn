@@ -119,9 +119,13 @@ def observe(engine, data, seed_sequence, settings: dict, directory: Path) -> dic
             state.update(elapsed_seconds=time.monotonic() - started, cpu_seconds=times.user + times.system - initial_cpu,
                          updated_utc=datetime.now(timezone.utc).isoformat())
             write_json(directory / "progress.json", state)
+            event = state.get("current_event_rank", "-")
+            event_total = state.get("events_in_sweep", "-")
+            candidate = state.get("candidate_completed", "-")
+            candidate_total = state.get("candidates_for_event", "-")
             print(f"[独立探针] {state['elapsed_seconds']:.1f}s | 似然计算完成 "
                   f"{state['likelihood_calls_completed']} 次 | EM轮完成 {state['em_sweeps_completed']} | "
-                  f"{state['status']}", flush=True)
+                  f"本轮事件 {event}/{event_total} 候选 {candidate}/{candidate_total} | {state['status']}", flush=True)
 
     def heartbeat():
         try:
@@ -134,6 +138,14 @@ def observe(engine, data, seed_sequence, settings: dict, directory: Path) -> dic
 
     def wrapped_kernel(training_data, sequence):
         check_time()
+        caller = sys._getframe(1)
+        context = caller.f_locals if caller.f_code.co_name == "_optimise_parameters" else {}
+        event_progress = {}
+        if all(key in context for key in ("order_bio", "i", "index", "possible_positions")):
+            order = np.asarray(context["order_bio"])
+            event_progress = {"current_event_rank": int(np.flatnonzero(order == context["i"])[0]) + 1,
+                              "events_in_sweep": len(order), "candidate_completed": int(context["index"]) + 1,
+                              "candidates_for_event": len(context["possible_positions"])}
         began = time.monotonic()
         result = kernel(training_data, sequence)
         if not np.isfinite(result).all():
@@ -142,6 +154,7 @@ def observe(engine, data, seed_sequence, settings: dict, directory: Path) -> dic
             state["likelihood_calls_completed"] += 1
             state["last_likelihood_seconds"] = time.monotonic() - began
             state["last_sequence_sha256"] = hashlib.sha256(np.asarray(sequence).tobytes()).hexdigest()
+            state.update(event_progress)
         return result
 
     def wrapped_optimise(training_data, sequence, fractions, rng):
@@ -154,6 +167,9 @@ def observe(engine, data, seed_sequence, settings: dict, directory: Path) -> dic
         iteration = int(caller.f_locals["iteration"])
         with lock:
             state["em_sweeps_started"] += 1
+            for key in ("current_event_rank", "events_in_sweep", "candidate_completed", "candidates_for_event"):
+                state.pop(key, None)
+            calls_before = state["likelihood_calls_completed"]
         emit()
         began = time.monotonic()
         result = optimise(training_data, sequence, fractions, rng)
@@ -164,7 +180,8 @@ def observe(engine, data, seed_sequence, settings: dict, directory: Path) -> dic
             state["em_sweeps_completed"] += 1
             state["em_sweeps"].append({"iteration_zero_based": iteration, "seconds": time.monotonic() - began,
                 "log_likelihood_before": before, "candidate_log_likelihood_after": after,
-                "candidate_change": after - before, "sequence_changed": not np.array_equal(sequence, result[0])})
+                "candidate_change": after - before, "sequence_changed": not np.array_equal(sequence, result[0]),
+                "likelihood_calls": state["likelihood_calls_completed"] - calls_before})
         emit()
         return result
 
@@ -203,6 +220,8 @@ def child_run(cfg: dict, settings: dict, directory: Path) -> None:
     from pySuStaIn.ZscoreSustain import ZScoreSustainData
     from substain_sustain.model import _engine
     train, features, model, metadata = prepare(cfg, settings)
+    from substain_sustain.acceleration import execution_settings
+    model["_acceleration"] = execution_settings({})  # 诊断自己负责计时，避免叠加正式心跳包装器。
     write_json(directory / "input_identity.json", metadata)
     os.nice(settings["nice_increment"])
     print(f"独立计时：C3={metadata['n_c3']}，训练={metadata['n_train']}，特征={len(features)}，"
@@ -231,10 +250,11 @@ def stop_child(process, grace: float) -> None:
             process.wait(timeout=grace)
 
 
-def main() -> int:
+def main(child_runner=child_run, default_probe_config=None, entry_script=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--probe-config", type=Path, default=Path(__file__).resolve().parents[1] / "config/cv_probe.yaml")
+    parser.add_argument("--probe-config", type=Path,
+                        default=default_probe_config or Path(__file__).resolve().parents[1] / "config/cv_probe.yaml")
     parser.add_argument("--child-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     settings = read_settings(args.probe_config)
@@ -247,7 +267,7 @@ def main() -> int:
         directory = args.child_dir.resolve()
         if directory.parent != root:
             raise ValueError("子进程输出不在指定诊断目录")
-        child_run(cfg, settings, directory)
+        child_runner(cfg, settings, directory)
         return 0
     root.mkdir(parents=True, exist_ok=True)
     from substain_sustain.model import _lock
@@ -257,7 +277,7 @@ def main() -> int:
         settings_path = directory / "settings.yaml"
         settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True), encoding="utf-8")
         print(f"诊断记录：{directory}\n只额外运行一个限时诊断进程；现有正式任务继续运行。", flush=True)
-        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--config", cfg["_config_file"],
+        process = subprocess.Popen([sys.executable, str(entry_script or Path(__file__).resolve()), "--config", cfg["_config_file"],
                                     "--probe-config", str(settings_path), "--child-dir", str(directory)],
                                    cwd=cfg["project_dir"], start_new_session=True)
         receipt = {"pid": process.pid, "status": "running", "scope": "independent_probe_only"}

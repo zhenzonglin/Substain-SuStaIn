@@ -94,7 +94,16 @@ runtime:
   memory_limit_gb: null
   blas_threads: 1
 
-# ===== 七、空间展示资源与公开模板制图 =====
+# ===== 七、分块计算与真实算法进度；不修改EM/MCMC科学参数 =====
+acceleration:
+  backend: row_blocks
+  block_rows: 32
+  progress_enabled: true
+  heartbeat_seconds: 5
+  progress_filename: progress.json
+  events_filename: progress_events.jsonl
+
+# ===== 八、空间展示资源与公开模板制图 =====
 assets:
   wmh_atlas: resources/display/wmh20.nii.gz
   gm_atlas: resources/display/gm20.nii.gz
@@ -117,7 +126,7 @@ assets:
   template_min_free_memory_gb: 16
   label_interpolation: nearest
 
-# ===== 八、报告展示参数；所有标题与图注说明ROI模型而非体素统计 =====
+# ===== 九、报告展示参数；所有标题与图注说明ROI模型而非体素统计 =====
 report:
   formats: [png, svg, tiff]
   font_family: DejaVu Sans
@@ -141,7 +150,7 @@ report:
   cohort_colors: {LS: "#5A7C65", C3: "#32699B", GB: "#B85F45"}
   strict: true
 
-# ===== 九、可移动展示包 =====
+# ===== 十、可移动展示包 =====
 bundle:
   compression: gz
   include_full_posterior: true

@@ -6,6 +6,8 @@ require_requested_workers: true
 
 # ===== 二、安全切换、审计和后台续跑 =====
 terminate_timeout_seconds: 30
+stop_ack_timeout_seconds: 10
+stop_poll_seconds: 0.05
 kill_timeout_seconds: 10
 backup_dir: .cache/parallel_switches
 log_dir: logs

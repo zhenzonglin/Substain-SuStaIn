@@ -68,6 +68,8 @@ def load_config(path: str | Path) -> dict:
 
 # ===== 参数校验：不默默纠正或降级研究规格 =====
 def validate_config(cfg: dict) -> None:
+    from .acceleration import execution_settings
+    execution_settings(cfg)
     from .feature_selection import selection_policy
     selection_policy(cfg)
     if set(cfg.get("cohorts", {})) != {"LS", "C3", "GB"}:

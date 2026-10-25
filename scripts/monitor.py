@@ -224,6 +224,38 @@ def verify_state(bundle: Path, roots: list[dict]) -> tuple[str, str]:
     return "未验收", "旧版验收失败不写阶段状态；无进程/无有效回执时不能判定成功"
 
 
+def internal_progress(folder: Path, cfg: dict, rows: list[dict]) -> str:
+    """只读心跳；PID、创建时间和新鲜度不匹配时不冒充活跃进度。"""
+    settings = cfg.get("acceleration", {})
+    value, error = read_json(folder / settings.get("progress_filename", "progress.json"))
+    if error:
+        return "进度记录暂不可读"
+    if not value:
+        return ""
+    live = any(r["pid"] == value.get("pid") and r["created"] == value.get("process_created") for r in rows)
+    age = max(0, time.time()-timestamp(value.get("updated_utc")))
+    prefix = "" if live else "历史进度/PID未匹配 | "
+    if live and age > settings.get("heartbeat_seconds", 5)*3:
+        prefix += f"心跳延迟{age:.0f}s | "
+    phase = value.get("phase", "?")
+    details = f"K={value.get('target_k', '?')} | {phase} | 似然调用={value.get('likelihood_calls_completed', 0)}"
+    if phase in ("EM", "startpoint", "optimization"):
+        details += (f" | 优化批{value.get('optimization_pass', 0)} 起点{value.get('startpoint', 0)}/"
+                    f"{value.get('startpoints_total', '?')} | EM轮{value.get('em_iteration', 0)} "
+                    f"事件{value.get('event_rank', 0)}/{value.get('event_total', '?')} "
+                    f"候选{value.get('candidate', 0)}/{value.get('candidate_total', '?')}")
+        before, after = value.get("log_likelihood_before"), value.get("candidate_log_likelihood")
+        if before is not None:
+            details += f" | 本轮前logL={before:.6g}"
+        if after is not None:
+            details += f" | 最近完成轮候选logL={after:.6g}"
+    elif phase in ("mcmc", "mcmc_tuning"):
+        details += f" | 当前迭代评估 {value.get('mcmc_iteration_current', 0)}/{value.get('mcmc_iterations', '?')}"
+        if value.get("tuning_pass"):
+            details += f" | 调优轮{value['tuning_pass']}"
+    return prefix + details + f" | 最近数值工作距心跳{value.get('work_age_seconds', 0):.1f}s"
+
+
 def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
     output, model = Path(cfg["output_dir"]), cfg["model"]
     pids = {row["pid"] for row in rows}
@@ -240,6 +272,9 @@ def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
         caches = sum((folder / "pickle_files" / f"C3_fold{fold}_subtype{k}.pickle").is_file()
                      for k in range(model["k_max"]))
         lines.append(f"  fold {fold:02d}  {state}  | 缓存 {caches}/{model['k_max']}")
+        detail = internal_progress(folder, cfg, rows)
+        if detail:
+            lines.append("    " + detail)
     lines.append(f"  已完成折：{complete}/{model['folds']}")
     selection, _ = read_json(output / "model/cv/selection.json")
     chosen = selection.get("n_subtypes")
@@ -254,6 +289,9 @@ def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
             state = "运行中" if locked_by(folder / ".lock", owners, pids) else (
                 "链缓存已写出" if caches == chosen else "已开始/待续" if folder.exists() else "待运行")
             lines.append(f"  {label}: {state} | 缓存 {caches}/{chosen} | 每模型MCMC {iterations:,}")
+            detail = internal_progress(folder, cfg, rows)
+            if detail:
+                lines.append("    " + detail)
     if error:
         lines.append("文件锁不可读，折/种子的运行状态无法确认：" + error)
     return lines
@@ -301,7 +339,7 @@ def render(cfg: dict, settings: dict, rows: list[dict], roots: list[dict], inacc
         lines.append(f"  仅展示前{settings['max_process_rows']}个进程；资源合计包含全部{len(rows)}个。")
     if inaccessible:
         lines.append(f"全机扫描有{inaccessible}次权限不足；如任务属于其他用户，进程数据可能不完整。")
-    lines.append("未读取MCMC链，不推算链内百分比；CPU为0也不能单独判定任务失败。")
+    lines.append("未加载MCMC链；迭代来自程序心跳，不等于缓存已写出；CPU或心跳延迟不能单独判失败。")
     return "\n".join(lines)
 
 

@@ -1,0 +1,27 @@
+# ===== 一、只覆盖计算方式和进度输出；model/reference/runtime均保持原值 =====
+acceleration:
+  backend: row_blocks
+  block_rows: 32
+  progress_enabled: true
+  heartbeat_seconds: 5
+  progress_filename: progress.json
+  events_filename: progress_events.jsonl
+# ===== 二、唯一允许迁移的旧包装器；数据、依赖、官方源码和科学参数仍严格一致 =====
+legacy_source_ref: 03dbfa57000082f3f306e21ec631e3f501e4dcdd
+legacy_wrapper_source_sha256:
+  model.py: 9fe761c62c88717356d9ceaad7a19870a1d79367ca22eb7407dc276354c08404
+  posterior.py: 269aefbb37047c4b7a7a06c878089af212a4fb6ed064cb6a7e90562c23016ba6
+# ===== 三、切换前在工作站全部C3输入上核对原始与分块似然 =====
+equivalence_sequences: 3
+equivalence_seed: 20261025
+required_formal_features: 38
+backup_dir: .cache/acceleration_switches
+log_dir: logs
+log_prefix: formal38_accelerated
+terminate_timeout_seconds: 30
+stop_ack_timeout_seconds: 10
+stop_poll_seconds: 0.05
+kill_timeout_seconds: 10
+require_requested_workers: true
+bundle_filename: sustain-display-bundle.tar.gz
+resume_stages: [crossvalidate, fit, validate, report, bundle, verify-bundle]

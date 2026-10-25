@@ -98,6 +98,10 @@ LS 五折是**诊断**：每折仅在训练 LS 中拟合均值和残差尺度，
 
 ## 五、CVIC 选择、稳定性与断点
 
+执行层默认使用acceleration.backend=row_blocks，沿受试者轴以32人为块计算似然；原官方轨迹构造、每例算式及特征求和顺序保留，EM/MCMC仍为固定官方函数。该方式不减少样本、事件、起点、迭代或候选模型。新缓存身份同时保存model.py、posterior.py、acceleration.py、progress.py的哈希及执行配置；旧缓存仅通过限定来源、全输入数值核对和审计备份后的迁移复用。
+
+progress.json和progress_events.jsonl记录当前优化批、起点、EM轮及事件/候选位置、logL和MCMC迭代评估。心跳时间与数值工作计数区分，均不是模型收敛或链已落盘的证明。完整缓存可续用，未保存的EM/MCMC仍需重算。操作见[安全切换说明](ACCELERATION_ZH.md)。
+
 每个 C3 受试者只进入一个测试折。官方对其所属训练折模型的 MCMC 样本计算混合似然；CVIC 按以下顺序汇总：先对模型样本平均该受试者的似然，再取对数，最后对受试者求和并乘 -2。
 
 ```text

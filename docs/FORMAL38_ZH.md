@@ -64,6 +64,8 @@ all会从ingest运行到report；已有且身份一致的阶段可复用。不�
 
 ## 当前4并行CV切换为10并行
 
+以下命令只适用于同一算法版本内改变并行数。旧版CV升级分块和EM监控，请使用[分块安全切换](ACCELERATION_ZH.md)中的switch_acceleration.py，不要用旧并行迁移脚本绕过源码变化。
+
 ```bash
 cd /data02/linzhenzong/Substain-SuStaIn &&
 git pull --ff-only &&
