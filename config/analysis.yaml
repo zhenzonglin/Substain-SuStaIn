@@ -82,7 +82,7 @@ model:
   posterior_batch_size: 128
   burn_in_fraction: 0.1
   # burn-in仅用于本项目个体后验与展示抽样；官方CVIC仍遵循上游全链规则。
-  # 外层按CV折并行；官方起点串行，BLAS单线程；已运行任务需安全切换脚本。
+  # 外层按CV折并行；起点并行由独立执行配置控制，BLAS保持单线程。
   workers: 10
 
 # ===== 六、资源与执行身份 =====
@@ -102,6 +102,17 @@ acceleration:
   heartbeat_seconds: 5
   progress_filename: progress.json
   events_filename: progress_events.jsonl
+
+# ===== 起点并行：已有任务必须经switch_startpoints.py审计迁移后启用 =====
+startpoint_parallel:
+  enabled: false
+  workers_per_fold: 3
+  fit_workers: 25
+  physical_core_limit: 30
+  logical_cpu_limit: 60
+  checkpoint_dir: startpoints
+  pool_progress_filename: progress_pool.json
+  worker_overhead_gb: 0.25
 
 # ===== 八、空间展示资源与公开模板制图 =====
 assets:

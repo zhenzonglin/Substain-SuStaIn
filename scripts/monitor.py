@@ -249,11 +249,39 @@ def internal_progress(folder: Path, cfg: dict, rows: list[dict]) -> str:
             details += f" | 本轮前logL={before:.6g}"
         if after is not None:
             details += f" | 最近完成轮候选logL={after:.6g}"
+    elif phase == "parallel_startpoints":
+        details += (f" | 已完成起点{value.get('startpoints_completed', 0)}/{value.get('startpoints_total', '?')}"
+                    f" | 检查点复用{value.get('startpoints_reused', 0)}")
     elif phase in ("mcmc", "mcmc_tuning"):
         details += f" | 当前迭代评估 {value.get('mcmc_iteration_current', 0)}/{value.get('mcmc_iterations', '?')}"
         if value.get("tuning_pass"):
             details += f" | 调优轮{value['tuning_pass']}"
     return prefix + details + f" | 最近数值工作距心跳{value.get('work_age_seconds', 0):.1f}s"
+
+
+def startpoint_progress(folder: Path, cfg: dict, rows: list[dict]) -> list[str]:
+    """仅读取当前批次正在运行的起点心跳；旧批次/旧PID不能冒充本次推进。"""
+    settings = cfg.get("startpoint_parallel", {})
+    value, error = read_json(folder / settings.get("pool_progress_filename", "progress_pool.json"))
+    if error or not value:
+        return []
+    live = any(r["pid"] == value.get("pid") and r["created"] == value.get("process_created") for r in rows)
+    prefix = "" if live else "历史批次/PID未匹配 | "
+    result = [f"    {prefix}起点池 {value.get('status')} | K={value.get('target_k')} | {value.get('method')}"
+              f" | 完成{len(value.get('completed', []))}/{value.get('total')}"
+              f" | 复用{len(value.get('reused', []))} | 活跃{len(value.get('running', []))}"]
+    relative = Path(value.get("batch", ""))
+    if relative.is_absolute() or ".." in relative.parts:
+        return result + ["      起点记录路径无效"]
+    for index in value.get("running", []):
+        if type(index) is not int or index < 0:
+            continue
+        point = folder / relative / f"point_{index:03d}"
+        detail = internal_progress(point, cfg, rows)
+        result.append(f"      起点{index+1}: {detail or '等待子进程启动'}")
+    if value.get("status") == "failed":
+        result.append(f"      失败：{value.get('error_type')}；检查点保留，详见日志。")
+    return result
 
 
 def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
@@ -275,6 +303,7 @@ def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
         detail = internal_progress(folder, cfg, rows)
         if detail:
             lines.append("    " + detail)
+        lines.extend(startpoint_progress(folder, cfg, rows))
     lines.append(f"  已完成折：{complete}/{model['folds']}")
     selection, _ = read_json(output / "model/cv/selection.json")
     chosen = selection.get("n_subtypes")
@@ -292,6 +321,7 @@ def model_progress(cfg: dict, rows: list[dict]) -> list[str]:
             detail = internal_progress(folder, cfg, rows)
             if detail:
                 lines.append("    " + detail)
+            lines.extend(startpoint_progress(folder, cfg, rows))
     if error:
         lines.append("文件锁不可读，折/种子的运行状态无法确认：" + error)
     return lines
@@ -316,6 +346,11 @@ def render(cfg: dict, settings: dict, rows: list[dict], roots: list[dict], inacc
     allocation = str(resources.get("workers", "尚无记录")) if not resource_error else "记录不可读"
     lines.insert(3, f"CV并行：配置上限 {cfg['model']['workers']} | 最近启动实际分配 {allocation} | "
                  "待处理折少于上限时活跃worker会减少")
+    if resources.get("parallel_startpoints"):
+        topology = resources.get("cpu_topology", {})
+        lines.insert(4, f"起点并行：每折{resources.get('startpoint_workers_per_model')} | "
+                     f"计算进程上限{resources.get('max_compute_processes')} | "
+                     f"CPU范围{topology.get('physical_cores')}物理核/{topology.get('logical_cpus')}逻辑CPU；BLAS=1")
     if not roots:
         lines.append("  当前未检测到该分析的活跃入口；完成/失败状态以已保存记录为准。")
     for command, label in STAGES.items():

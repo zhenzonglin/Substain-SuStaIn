@@ -1,0 +1,55 @@
+# ===== 一、执行方式；38维、25起点、种子、分折、阈值及MCMC均不修改 =====
+acceleration:
+  backend: row_blocks
+  block_rows: 32
+  progress_enabled: true
+  heartbeat_seconds: 5
+  progress_filename: progress.json
+  events_filename: progress_events.jsonl
+preserve_acceleration: true
+startpoint_parallel:
+  enabled: true
+  workers_per_fold: 3
+  fit_workers: 25
+  physical_core_limit: 30
+  logical_cpu_limit: 60
+  checkpoint_dir: startpoints
+  pool_progress_filename: progress_pool.json
+  worker_overhead_gb: 0.25
+
+# ===== 二、仅允许已发布的分块加速版本迁移；源码/输入不符则保留旧任务 =====
+legacy_source_ref: bc2e10a1c47e34d349c48a748b11eb89fde78d9f
+legacy_wrapper_source_sha256:
+  model.py: c58e80e466fc07a28e2db87b08d6c02599c98ab3abbecee714b3c063e72fb3ff
+  posterior.py: 269aefbb37047c4b7a7a06c878089af212a4fb6ed064cb6a7e90562c23016ba6
+  acceleration.py: c71f3c9f7364f18ee2776afe3f809b61ded416eac638fb14da529e01d4d5de7e
+  progress.py: 21f63b8c344b2de5f9ecf825c9c7caa7253d00e1c3b57b8a818d38dbc2463282
+
+# ===== 三、立即切换：每折K=1完整；不等待K=2，已有完整更高K也保留 =====
+required_formal_features: 38
+required_completed_k: 1
+cache_validation_chunk: 256
+cache_probability_atol: 0.00000001
+equivalence_sequences: 3
+equivalence_seed: 20261025
+parallel_probe:
+  seed: 20261027
+  subjects: 12
+  features: 3
+  z_vals: [1, 2]
+  z_max: 5
+  startpoints: 3
+  mcmc_iterations: 30
+
+# ===== 四、资源与审计；内存不足时降低活跃折数，不改变每折科学参数 =====
+require_requested_workers: false
+require_startpoint_workers: 3
+backup_dir: .cache/startpoint_switches
+log_dir: logs
+log_prefix: formal38_startpoints30
+terminate_timeout_seconds: 30
+stop_ack_timeout_seconds: 10
+stop_poll_seconds: 0.05
+kill_timeout_seconds: 10
+bundle_filename: sustain-display-bundle.tar.gz
+resume_stages: [crossvalidate, fit, validate, report, bundle, verify-bundle]

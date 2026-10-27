@@ -1,7 +1,7 @@
 """固定官方 pySuStaIn 的训练、交叉验证、稳定性与冻结外部应用。
 
 只包装官方接口，不修改 EM/MCMC。断点按输入/配置/源码哈希验证；
-每折可并行，官方 startpoints 始终串行，避免上游默认占用全部核心。
+每折可并行，起点池可按配置受限并行，避免上游默认占用全部核心。
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from threadpoolctl import threadpool_limits
 
 from .posterior import infer_posterior, sample_indices
 from .feature_selection import frozen_dictionary, selection_policy
+from .startpoints import parallel_settings, within_cpu_budget
 
 UPSTREAM_COMMIT = "708fa22d89c9692dbeafcc2c31a1c8460ced5640"
 UPSTREAM_HASHES = {
@@ -122,9 +123,10 @@ def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
         "dependency_versions": {"python": ".".join(str(v) for v in sys.version_info[:3]),
                                 **{name: version(name) for name in ("numpy", "scipy", "pandas", "scikit-learn", "pathos", "dill", "multiprocess", "threadpoolctl")}},
         "wrapper_source_sha256": {name: _hash(Path(__file__).with_name(name))
-                                  for name in ("model.py", "posterior.py", "acceleration.py", "progress.py")},
+                                  for name in ("model.py", "posterior.py", "acceleration.py", "progress.py", "startpoints.py")},
         "model_config": cfg["model"], "runtime_config": cfg.get("runtime", {}),
         "acceleration_config": execution_settings(cfg),
+        "startpoint_parallel_config": parallel_settings(cfg),
         "feature_selection_policy": selection_policy(cfg),
         "reference_config": cfg.get("reference", {}),
         "input_sha256": {str(p.relative_to(output)): _hash(p) for p in files + required},
@@ -178,6 +180,7 @@ def _settings(cfg: dict, n_features: int) -> dict:
     from .acceleration import execution_settings
     settings = dict(cfg["model"])
     settings["_acceleration"] = execution_settings(cfg)
+    settings["_startpoint_parallel"] = parallel_settings(cfg)
     settings["reference_age_min"] = float(cfg.get("reference", {}).get("age_min", 50))
     settings["reference_age_max"] = float(cfg.get("reference", {}).get("age_max", 75))
     for name in ("k_max", "folds", "startpoints", "cv_iterations", "fit_iterations", "stability_iterations", "posterior_samples", "workers"):
@@ -221,6 +224,14 @@ def _engine(data: np.ndarray, features: pd.DataFrame, settings: dict, directory:
     if execution["progress_enabled"]:
         from .progress import install_progress
         install_progress(engine, directory, execution)
+    if settings.get("_startpoint_runtime"):
+        from .startpoints import OrderedStartpointPool
+        # 子进程只接收官方构造参数，不复制父进程的锁、心跳或随机生成器。
+        spec = {"model": {key: settings[key] for key in ("z_vals", "z_max", "startpoints")},
+                "acceleration": execution, "labels": features.label.tolist(),
+                "seed": int(seed), "iterations": int(iterations), "target_k": int(n_subtypes)}
+        engine.pool = OrderedStartpointPool(engine, directory, settings["_startpoint_parallel"],
+                                           settings["_startpoint_runtime"], spec)
     return engine
 
 
@@ -276,6 +287,30 @@ def _resources(cfg: dict, directory: Path, n_rows: int, n_features: int,
     n_events = n_features * len(cfg["model"]["z_vals"])
     estimate = estimate_working_bytes(n_rows, n_features, n_events, n_subtypes, iterations, factor)
     workers = min(jobs, int(cfg["model"]["workers"]), max(1, os.cpu_count() or 1), budget // estimate)
+    parallel = parallel_settings(cfg)
+    extra = {}
+    if parallel["enabled"]:
+        from .startpoints import cpu_topology
+        topology = cpu_topology(parallel)
+        per_fold = min(parallel["workers_per_fold"] if jobs > 1 else parallel["fit_workers"], cfg["model"]["startpoints"])
+        # 候选位置张量最多同时保留新旧两个；分块后不再保留全受试者×特征×阶段张量。
+        train_rows = n_rows - n_rows // cfg["model"]["folds"] if jobs > 1 else n_rows
+        block_rows = min(train_rows, int(cfg.get("acceleration", {}).get("block_rows", 32)))
+        overhead = int(parallel["worker_overhead_gb"] * 1024**3)
+        em_worker = math.ceil(8 * (2 * train_rows * (n_events+1) * n_events
+                                  + 8 * train_rows * (n_events+1) * n_subtypes
+                                  + 4 * block_rows * n_features * (n_events+1)) * factor) + overhead
+        # 父进程保留上一个K的链；起点池退出后才开始当前K的MCMC。
+        parent = math.ceil(8 * iterations * (n_subtypes-1) * (n_events+2) * factor) + overhead
+        while per_fold > 0 and parent + per_fold * em_worker > budget:
+            per_fold -= 1
+        if per_fold < 1:
+            raise MemoryError("一个官方EM起点及父进程已超过内存预算")
+        estimate = max(estimate, parent + per_fold * em_worker)
+        workers = min(jobs, int(cfg["model"]["workers"]), topology["physical_cores"] // per_fold, budget // estimate)
+        extra = {"cpu_topology": topology, "startpoint_workers_per_model": per_fold,
+                 "max_compute_processes": int(workers) * per_fold, "estimated_em_worker_bytes": em_worker,
+                 "estimated_parent_bytes": parent, "parallel_startpoints": True}
     if workers < 1:
         raise MemoryError(f"单个模型预计工作集 {estimate / 1024**3:.2f} GiB 超过内存预算 {budget / 1024**3:.2f} GiB。")
     # 全候选模型均留链；重复种子及折数明确计入，而非只估计选定 K。
@@ -288,7 +323,7 @@ def _resources(cfg: dict, directory: Path, n_rows: int, n_features: int,
         raise OSError(f"保留完整 MCMC 链预计还需要 {additional / 1024**3:.2f} GiB，输出盘剩余不足。")
     return {"workers": int(workers), "estimated_worker_bytes": estimate, "memory_budget_bytes": budget,
             "estimated_chain_disk_bytes": disk, "additional_chain_disk_bytes": additional, "disk_free_bytes": free,
-            "parallel_startpoints": False, "blas_threads": int(runtime.get("blas_threads", 1))}
+            "parallel_startpoints": False, "blas_threads": int(runtime.get("blas_threads", 1)), **extra}
 
 
 def _pickle(path: Path, n_subtypes: int, n_events: int, iterations: int) -> dict:
@@ -321,6 +356,9 @@ def _fold_worker(payload: dict) -> dict:
     features = _features(output, cfg)
     _, data = _read_z(output / "reference" / "C3_primary_z.tsv", features)
     settings = _settings(cfg, len(features))
+    if settings["_startpoint_parallel"]["enabled"]:
+        from .startpoints import fold_runtime
+        settings["_startpoint_runtime"] = fold_runtime()
     directory = output / "model" / "cv" / f"fold_{fold}"
     with _lock(directory):
         identity = {"parent": payload["identity"], "fold": fold, "indices": splits[fold]}
@@ -364,6 +402,7 @@ def _fold_worker(payload: dict) -> dict:
         return result
 
 
+@within_cpu_budget
 def run_crossvalidate(cfg: dict, output: Path) -> dict:
     output = Path(output)
     features = _features(output, cfg)
@@ -386,7 +425,31 @@ def run_crossvalidate(cfg: dict, output: Path) -> dict:
                                                          for k in range(1, int(settings["k_max"]) + 1)}}
                                         for i, test in enumerate(splits)])
         jobs = [{"output": str(output), "cfg": cfg, "fold": fold, "splits": splits, "identity": identity} for fold in range(n_folds)]
-        if resource["workers"] == 1:
+        if resource["parallel_startpoints"]:
+            import multiprocessing as mp
+            from .startpoints import initialize_fold, _abort_executor
+            context = mp.get_context("spawn")
+            allocation_queue = context.Queue()
+            per_fold = resource["startpoint_workers_per_model"]
+            groups = resource["cpu_topology"]["core_cpu_groups"]
+            for slot in range(resource["workers"]):
+                allocation_queue.put({"workers": per_fold, "core_cpu_groups": groups[slot*per_fold:(slot+1)*per_fold]})
+            executor = ProcessPoolExecutor(max_workers=resource["workers"], mp_context=context,
+                                           initializer=initialize_fold, initargs=(allocation_queue, os.getpid()))
+            try:
+                futures = [executor.submit(_fold_worker, job) for job in jobs]
+                from concurrent.futures import as_completed
+                results = [future.result() for future in as_completed(futures)]
+                results.sort(key=lambda result: result["fold"])
+            except BaseException:
+                _abort_executor(executor)
+                raise
+            else:
+                executor.shutdown(wait=True)
+            finally:
+                allocation_queue.close()
+                allocation_queue.join_thread()
+        elif resource["workers"] == 1:
             results = [_fold_worker(job) for job in jobs]
         else:
             with ProcessPoolExecutor(max_workers=resource["workers"]) as executor:
@@ -414,7 +477,7 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
     current = _identity(cfg, output, [output / "reference" / "C3_primary_z.tsv"], "C3_crossvalidation")
     for key in ("role", "schema_version", "upstream_commit", "reference_hash", "upstream_source_sha256",
                 "wrapper_source_sha256", "dependency_versions", "reference_config", "input_sha256",
-                "feature_selection_policy", "acceleration_config"):
+                "feature_selection_policy", "acceleration_config", "startpoint_parallel_config"):
         if saved.get(key) != current.get(key):
             raise ValueError(f"当前拟合与已完成 CV 身份不符（{key}），必须重新交叉验证。")
     # 允许仅改变最终链、稳定性和后验展示参数；CV 实际使用的参数必须相同。
@@ -516,6 +579,7 @@ def _cv_display(output: Path, primary: dict, settings: dict, n_subtypes: int) ->
          labels=features.label.to_numpy(dtype=str))
 
 
+@within_cpu_budget
 def run_fit(cfg: dict, output: Path) -> dict:
     output = Path(output)
     selection_path = output / "model" / "cv" / "selection.json"
@@ -534,7 +598,11 @@ def run_fit(cfg: dict, output: Path) -> dict:
         if len(set(seeds)) != len(seeds):
             raise ValueError("主随机种子和稳定性种子必须互不重复。")
         weighted_copies = 1 + (len(seeds) - 1) * settings["stability_iterations"] / settings["fit_iterations"]
-        _json(directory / "resources.json", _resources(cfg, directory, len(data), len(features), settings["fit_iterations"], chosen, 1, weighted_copies))
+        resource = _resources(cfg, directory, len(data), len(features), settings["fit_iterations"], chosen, 1, weighted_copies)
+        _json(directory / "resources.json", resource)
+        if resource["parallel_startpoints"]:
+            count = resource["startpoint_workers_per_model"]
+            settings["_startpoint_runtime"] = {"workers": count, "core_cpu_groups": resource["cpu_topology"]["core_cpu_groups"][:count]}
         _json(directory / "model_seeds.json", {str(seed): {str(k): _model_seed(seed, -1, k)
                                                            for k in range(1, chosen + 1)} for seed in seeds})
         fitted = []
@@ -592,6 +660,7 @@ def run_fit(cfg: dict, output: Path) -> dict:
 
 
 # ---------- 冻结 GB 验证及全龄应用敏感性，不参与训练/选型 ----------
+@within_cpu_budget
 def run_validate(cfg: dict, output: Path) -> dict:
     output = Path(output)
     summary_path = output / "model" / "fit" / "summary.json"
@@ -621,7 +690,7 @@ def run_validate(cfg: dict, output: Path) -> dict:
     with _lock(directory):
         identity = _identity(cfg, output, [summary_path, primary_path, output / "reference" / "GB_primary_z.tsv",
                                           output / "reference" / "GB_z.tsv"], "GB_frozen_validation")
-        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions", "acceleration_config"):
+        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions", "acceleration_config", "startpoint_parallel_config"):
             if fit_manifest.get(key) != identity.get(key):
                 raise ValueError(f"当前验证实现与冻结主模型不同（{key}），请使用原锁定环境及源码。")
         _guard(directory, identity)

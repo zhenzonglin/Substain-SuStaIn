@@ -70,6 +70,8 @@ def load_config(path: str | Path) -> dict:
 def validate_config(cfg: dict) -> None:
     from .acceleration import execution_settings
     execution_settings(cfg)
+    from .startpoints import parallel_settings
+    parallel_settings(cfg)
     from .feature_selection import selection_policy
     selection_policy(cfg)
     if set(cfg.get("cohorts", {})) != {"LS", "C3", "GB"}:

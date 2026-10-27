@@ -1,7 +1,7 @@
 # ===== 只读监控配置；独立于分析配置，不参与模型缓存身份 =====
 refresh_seconds: 5
 cpu_sample_seconds: 1
-max_process_rows: 12
+max_process_rows: 45
 process_start_tolerance_seconds: 3
 # 默认展示包名称；若使用bundle --destination自定义文件名，在这里修改。
 bundle_filename: sustain-display-bundle.tar.gz
