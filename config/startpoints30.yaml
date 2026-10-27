@@ -7,6 +7,14 @@ acceleration:
   progress_filename: progress.json
   events_filename: progress_events.jsonl
 preserve_acceleration: true
+numerical_evaluation:
+  backend: logsumexp_v1
+  block_rows: 32
+  relative_tolerance: 0.0000000001
+  absolute_log_tolerance: 0.00000001
+  z_warning_threshold: 5
+  top_features: 5
+  heldout_dir: heldout_evaluation
 startpoint_parallel:
   enabled: true
   workers_per_fold: 3

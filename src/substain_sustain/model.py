@@ -31,6 +31,7 @@ from threadpoolctl import threadpool_limits
 from .posterior import infer_posterior, sample_indices
 from .feature_selection import frozen_dictionary, selection_policy
 from .startpoints import parallel_settings, within_cpu_budget
+from .log_evaluation import numerical_settings
 
 UPSTREAM_COMMIT = "708fa22d89c9692dbeafcc2c31a1c8460ced5640"
 UPSTREAM_HASHES = {
@@ -123,10 +124,11 @@ def _identity(cfg: dict, output: Path, files: list[Path], role: str) -> dict:
         "dependency_versions": {"python": ".".join(str(v) for v in sys.version_info[:3]),
                                 **{name: version(name) for name in ("numpy", "scipy", "pandas", "scikit-learn", "pathos", "dill", "multiprocess", "threadpoolctl")}},
         "wrapper_source_sha256": {name: _hash(Path(__file__).with_name(name))
-                                  for name in ("model.py", "posterior.py", "acceleration.py", "progress.py", "startpoints.py")},
+                                  for name in ("model.py", "posterior.py", "acceleration.py", "progress.py", "startpoints.py", "log_evaluation.py")},
         "model_config": cfg["model"], "runtime_config": cfg.get("runtime", {}),
         "acceleration_config": execution_settings(cfg),
         "startpoint_parallel_config": parallel_settings(cfg),
+        "numerical_evaluation_config": numerical_settings(cfg),
         "feature_selection_policy": selection_policy(cfg),
         "reference_config": cfg.get("reference", {}),
         "input_sha256": {str(p.relative_to(output)): _hash(p) for p in files + required},
@@ -181,6 +183,7 @@ def _settings(cfg: dict, n_features: int) -> dict:
     settings = dict(cfg["model"])
     settings["_acceleration"] = execution_settings(cfg)
     settings["_startpoint_parallel"] = parallel_settings(cfg)
+    settings["_numerical_evaluation"] = numerical_settings(cfg)
     settings["reference_age_min"] = float(cfg.get("reference", {}).get("age_min", 50))
     settings["reference_age_max"] = float(cfg.get("reference", {}).get("age_max", 75))
     for name in ("k_max", "folds", "startpoints", "cv_iterations", "fit_iterations", "stability_iterations", "posterior_samples", "workers"):
@@ -224,6 +227,8 @@ def _engine(data: np.ndarray, features: pd.DataFrame, settings: dict, directory:
     if execution["progress_enabled"]:
         from .progress import install_progress
         install_progress(engine, directory, execution)
+    from .log_evaluation import install_stable_subtyping
+    install_stable_subtyping(engine, settings.get("_numerical_evaluation", numerical_settings({})))
     if settings.get("_startpoint_runtime"):
         from .startpoints import OrderedStartpointPool
         # 子进程只接收官方构造参数，不复制父进程的锁、心跳或随机生成器。
@@ -369,7 +374,10 @@ def _fold_worker(payload: dict) -> dict:
                 for k in range(1, int(settings["k_max"]) + 1):
                     _pickle(directory / "pickle_files" / f"C3_fold{fold}_subtype{k - 1}.pickle", k,
                             len(features) * len(settings["z_vals"]), settings["cv_iterations"])
-                return json.loads(marker.read_text())
+                completed = json.loads(marker.read_text())
+                if (completed.get("evaluation_backend") == numerical_settings(cfg)["backend"]
+                        and (directory / "heldout_subjects.tsv").is_file()):
+                    return completed
             except (FileNotFoundError, EOFError, pickle.UnpicklingError, KeyError, ValueError):
                 marker.rename(marker.with_name(marker.name + f".incomplete.{time.time_ns()}"))
         _audit_pickles(directory, settings, len(features), settings["cv_iterations"], f"C3_fold{fold}")
@@ -384,20 +392,50 @@ def _fold_worker(payload: dict) -> dict:
             from pySuStaIn.ZscoreSustain import ZScoreSustainData
             test_data = ZScoreSustainData(data[test_indices[fold]], data.shape[1] * len(settings["z_vals"]))
             rows = []
+            from .log_evaluation import evaluate_samples, check_raw_mean, z_diagnostics, training_floor_audit
+            evaluation_settings = numerical_settings(cfg)
+            evaluation_dir = directory / evaluation_settings["heldout_dir"]
+            subject_frame, _ = _read_z(output / "reference/C3_primary_z.tsv", features)
+            train_mask = np.ones(len(data), dtype=bool)
+            train_mask[test_indices[fold]] = False
+            train_data = ZScoreSustainData(data[train_mask], test_data.getNumStages())
+            heldout_rows = []
             for k in range(1, int(settings["k_max"]) + 1):
                 model = _pickle(directory / "pickle_files" / f"C3_fold{fold}_subtype{k - 1}.pickle",
                                 k, test_data.getNumStages(), settings["cv_iterations"])
-                # 官方 partial-fold API 不返回汇总似然；从同一冻结链精确重算。
-                likelihoods = engine._evaluate_likelihood_setofsamples(test_data, model["samples_sequence"], model["samples_f"])
-                mean_likelihood = np.asarray(model["mean_likelihood_subj_test"])
-                if not np.all(np.isfinite(mean_likelihood)) or np.any(mean_likelihood <= 0):
-                    raise FloatingPointError("验证折出现零或非有限似然，不能产生有效 CVIC。")
+                # 用同一官方抽样索引评估冻结链；保留原线性值，CVIC在log域求均值。
+                tracker = getattr(engine, "_progress_tracker", None)
+                with tracker.active("heldout_log_evaluation") if tracker else contextlib.nullcontext():
+                    evaluated = evaluate_samples(engine, test_data, model["samples_sequence"], model["samples_f"], evaluation_settings, tracker)
+                mean_likelihood = check_raw_mean(model["mean_likelihood_subj_test"], evaluated, len(test_indices[fold]), evaluation_settings)
+                zero_n = int((mean_likelihood == 0).sum())
+                training_audit = training_floor_audit(engine, train_data, model["ml_sequence_EM"], model["ml_f_EM"], evaluation_settings)
+                diagnostic = z_diagnostics(test_data.data[mean_likelihood == 0], features.feature_id.tolist(), evaluation_settings) if zero_n else {"subjects": 0}
+                _json(evaluation_dir / f"k{k}_audit.json", {"backend": evaluation_settings["backend"],
+                      "sample_indices": evaluated["indices"].tolist(), "raw_zero_subjects": zero_n,
+                      "zero_z_diagnostics": diagnostic, "raw_cache_matches_recomputation": True,
+                      "training_at_saved_ml_em": training_audit,
+                      "training_EM_MCMC_unchanged": True})
+                per_subject = pd.DataFrame({"subject_key": subject_frame.iloc[test_indices[fold]].subject_key.to_numpy(),
+                    "fold": fold, "n_subtypes": k, "raw_mean_likelihood": mean_likelihood,
+                    "stable_log_mean_likelihood": evaluated["log_mean"], "raw_zero_mean": mean_likelihood == 0,
+                    "raw_zero_draws": evaluated["raw_zero_draws"], "evaluated_draws": len(evaluated["indices"]),
+                    "max_abs_z": np.abs(test_data.data).max(axis=1)})
+                _table(evaluation_dir / f"k{k}_subjects.tsv", per_subject)
+                heldout_rows.append(per_subject)
                 rows.append({"fold": fold, "n_subtypes": k,
-                             "log_likelihood": float(np.mean(np.log(likelihoods + 1e-250).sum(axis=0))),
-                             "cvic_component": float(-2 * np.log(mean_likelihood).sum()),
+                             "log_likelihood": float(evaluated["logs"].sum(axis=0).mean()),
+                             "official_floored_log_likelihood": float(np.log(evaluated["raw"] + 1e-250).sum(axis=0).mean()),
+                             "cvic_component": float(-2 * evaluated["log_mean"].sum()),
+                             "official_cvic_component": None if zero_n else float(-2*np.log(mean_likelihood).sum()),
+                             "official_cvic_status": "infinite_due_to_zero" if zero_n else "finite",
+                             "raw_zero_subjects": zero_n, "evaluation_backend": evaluation_settings["backend"],
+                             "training_below_floor_subjects": training_audit["below_official_floor_subjects"],
                              "n_test": len(test_indices[fold])})
+            _table(directory / "heldout_subjects.tsv", pd.concat(heldout_rows, ignore_index=True))
         _table(directory / "metrics.tsv", pd.DataFrame(rows))
-        result = {"fold": fold, "status": "complete", "metrics": rows}
+        result = {"fold": fold, "status": "complete", "metrics": rows,
+                  "evaluation_backend": evaluation_settings["backend"]}
         _json(marker, result)
         return result
 
@@ -456,11 +494,21 @@ def run_crossvalidate(cfg: dict, output: Path) -> dict:
                 results = list(executor.map(_fold_worker, jobs))
         metrics = pd.DataFrame([row for result in results for row in result["metrics"]])
         _table(directory / "fold_loglikelihood.tsv", metrics)
+        _table(directory / "heldout_subjects.tsv", pd.concat([
+            pd.read_csv(directory/f"fold_{fold}"/"heldout_subjects.tsv", sep="\t", dtype={"subject_key": str})
+            for fold in range(n_folds)], ignore_index=True))
         cvic = metrics.groupby("n_subtypes", as_index=False).agg(cvic=("cvic_component", "sum"), mean_log_likelihood=("log_likelihood", "mean"))
+        cvic["raw_zero_subjects"] = metrics.groupby("n_subtypes").raw_zero_subjects.sum().reindex(cvic.n_subtypes).to_numpy()
+        _json(directory / "numerical_evaluation.json", {"backend": numerical_settings(cfg)["backend"],
+              "raw_zero_subjects_per_k": dict(zip(cvic.n_subtypes.astype(str), cvic.raw_zero_subjects.astype(int))),
+              "official_training_uses_1e_minus_250": True, "training_EM_MCMC_unchanged": True,
+              "training_floor_counts_per_fold_k": metrics[["fold", "n_subtypes", "training_below_floor_subjects"]].to_dict("records"),
+              "note": "Stable evaluation does not correct training-floor effects or prove calibration/model fit."})
         chosen = int(cvic.sort_values(["cvic", "n_subtypes"]).iloc[0].n_subtypes)
         cvic["selected"] = cvic.n_subtypes == chosen
         _table(directory / "cvic.tsv", cvic)
         selection = {"n_subtypes": chosen, "criterion": "minimum_CVIC", "tie_rule": "smaller_K",
+                     "evaluation_backend": numerical_settings(cfg)["backend"],
                      "selection_status": "boundary_optimum" if chosen == settings["k_max"] else "interior_optimum",
                      "candidate_k": list(range(1, int(settings["k_max"]) + 1)), "n_folds": n_folds,
                      "scope": "C3 age 50-75 only; GB is never used for selection",
@@ -477,7 +525,7 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
     current = _identity(cfg, output, [output / "reference" / "C3_primary_z.tsv"], "C3_crossvalidation")
     for key in ("role", "schema_version", "upstream_commit", "reference_hash", "upstream_source_sha256",
                 "wrapper_source_sha256", "dependency_versions", "reference_config", "input_sha256",
-                "feature_selection_policy", "acceleration_config", "startpoint_parallel_config"):
+                "feature_selection_policy", "acceleration_config", "startpoint_parallel_config", "numerical_evaluation_config"):
         if saved.get(key) != current.get(key):
             raise ValueError(f"当前拟合与已完成 CV 身份不符（{key}），必须重新交叉验证。")
     # 允许仅改变最终链、稳定性和后验展示参数；CV 实际使用的参数必须相同。
@@ -485,6 +533,9 @@ def _validated_selection(cfg: dict, output: Path) -> dict:
         if saved["model_config"].get(key) != cfg["model"].get(key):
             raise ValueError(f"model.{key} 与已完成 CV 不同，不能复用旧选型。")
     selection = json.loads((directory / "selection.json").read_text())
+    if (cfg.get("runtime", {}).get("profile", "formal") == "formal"
+            and selection.get("evaluation_backend") != numerical_settings(cfg)["backend"]):
+        raise ValueError("正式CV评分缺少稳定评估版本；重跑crossvalidate重算派生分数，完整链保留")
     cvic = pd.read_csv(directory / "cvic.tsv", sep="\t")
     expected_k = list(range(1, int(cfg["model"]["k_max"]) + 1))
     if (sorted(cvic.n_subtypes.tolist()) != expected_k or not np.isfinite(cvic.cvic).all()
@@ -517,6 +568,9 @@ def _inference(engine, frame: pd.DataFrame, data: np.ndarray, model: dict,
                  "stage_conditional_probability", "stage_zero_probability", "subtype_entropy", "stage_expected"):
         assigned[name] = posterior[name]
     assigned["n_subtypes"] = model["samples_sequence"].shape[0]
+    assigned["official_raw_valid"] = posterior["official_raw_valid"]
+    assigned["official_raw_available"] = posterior["official_raw_available"]
+    assigned["numerical_evaluation"] = "logsumexp_v1"
     assigned["subtype_name"] = np.where(assigned.stage_zero, "Undifferentiated", "Subtype " + assigned.subtype.astype(str))
     assigned["age_scope"] = np.where(assigned.age.between(settings["reference_age_min"], settings["reference_age_max"], inclusive="both"), "within_reference_range", "outside_reference_range")
     _table(destination / f"assignments_{tag}.tsv", assigned)
@@ -690,7 +744,7 @@ def run_validate(cfg: dict, output: Path) -> dict:
     with _lock(directory):
         identity = _identity(cfg, output, [summary_path, primary_path, output / "reference" / "GB_primary_z.tsv",
                                           output / "reference" / "GB_z.tsv"], "GB_frozen_validation")
-        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions", "acceleration_config", "startpoint_parallel_config"):
+        for key in ("upstream_commit", "upstream_source_sha256", "wrapper_source_sha256", "dependency_versions", "acceleration_config", "startpoint_parallel_config", "numerical_evaluation_config"):
             if fit_manifest.get(key) != identity.get(key):
                 raise ValueError(f"当前验证实现与冻结主模型不同（{key}），请使用原锁定环境及源码。")
         _guard(directory, identity)

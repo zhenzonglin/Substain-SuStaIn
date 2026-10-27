@@ -256,6 +256,8 @@ def internal_progress(folder: Path, cfg: dict, rows: list[dict]) -> str:
         details += f" | 当前迭代评估 {value.get('mcmc_iteration_current', 0)}/{value.get('mcmc_iterations', '?')}"
         if value.get("tuning_pass"):
             details += f" | 调优轮{value['tuning_pass']}"
+    elif phase == "heldout_log_evaluation":
+        details += f" | 冻结链评估{value.get('evaluation_draw', 0)}/{value.get('evaluation_draws', '?')}；非重新训练"
     return prefix + details + f" | 最近数值工作距心跳{value.get('work_age_seconds', 0):.1f}s"
 
 

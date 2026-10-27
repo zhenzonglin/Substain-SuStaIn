@@ -28,11 +28,12 @@ def scientific_identity(value):
     value.pop("wrapper_source_sha256", None)
     value.pop("acceleration_config", None)
     value.pop("startpoint_parallel_config", None)
+    value.pop("numerical_evaluation_config", None)
     return value
 
 
 def scientific_config(value):
-    return {k: v for k, v in value.items() if not k.startswith("_") and k not in ("acceleration", "startpoint_parallel")}
+    return {k: v for k, v in value.items() if not k.startswith("_") and k not in ("acceleration", "startpoint_parallel", "numerical_evaluation")}
 
 
 def target_config(cfg, settings):
@@ -40,6 +41,8 @@ def target_config(cfg, settings):
     target["acceleration"] = copy.deepcopy(settings["acceleration"])
     if "startpoint_parallel" in settings:
         target["startpoint_parallel"] = copy.deepcopy(settings["startpoint_parallel"])
+    if "numerical_evaluation" in settings:
+        target["numerical_evaluation"] = copy.deepcopy(settings["numerical_evaluation"])
     validate_config(target)
     return target
 
@@ -91,7 +94,7 @@ def plan(target, settings):
                 or scientific_config(previous) != scientific_config(target)):
             raise ValueError(f"{stage}尚未完成或其配置快照不同")
         record.update(config_sha256=parallel.config_hash(target), reused_from_config_sha256=previous_hash,
-                      reuse_reason="bitwise-validated execution backend and progress only; stage not rerun")
+                      reuse_reason="validated scheduling and stable frozen-model evaluation; stage not rerun")
         updates[path] = parallel.encoded(record)
     return old, new, updates
 
@@ -163,6 +166,8 @@ def prepare_backup(target, settings, backup):
     local["acceleration"] = target["acceleration"]
     if "startpoint_parallel" in settings:
         local["startpoint_parallel"] = target["startpoint_parallel"]
+    if "numerical_evaluation" in settings:
+        local["numerical_evaluation"] = target["numerical_evaluation"]
     updates[local_path] = yaml.safe_dump(local, allow_unicode=True, sort_keys=False).encode()
     updates[output / "execution" / f"config_{parallel.config_hash(target)}.json"] = parallel.encoded(parallel.snapshot(target))
     originals = {path: path.read_bytes() if path.exists() else None for path in updates}
@@ -178,6 +183,13 @@ def prepare_backup(target, settings, backup):
         path = output / "execution" / name
         if path.is_file():
             (backup / f"previous_{name}").write_bytes(path.read_bytes())
+    # 数值评估更新后重算派生分数；旧派生表/完成标记另存，原始模型链不改。
+    derived = list((output/"model/cv").glob("*.tsv")) + list((output/"model/cv").glob("fold_*/metrics.tsv"))
+    derived += list((output/"model/cv").glob("fold_*/complete.json"))
+    for path in derived:
+        saved = backup/"previous_evaluation"/path.relative_to(output)
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        saved.write_bytes(path.read_bytes())
     caches = []
     n_events = len(_features(output, target))*len(target["model"]["z_vals"])
     strict_caches = audit_cv_caches(target, settings) if "required_completed_k" in settings else None
@@ -234,15 +246,19 @@ def migrate(target, transaction, backup):
 def audit_cv_caches(target, settings, folds_to_check=None):
     """分块核验完整链；不改写缓存，发现损坏时在停止旧任务前拒绝切换。"""
     import numpy as np
-    from substain_sustain.model import _features, _pickle, _hash
+    from substain_sustain.model import _features, _pickle, _hash, _read_z
+    from substain_sustain.log_evaluation import numerical_settings, evaluate_samples, check_raw_mean, z_diagnostics, training_floor_audit
     output = Path(target["output_dir"])
     cv, model = output/"model/cv", target["model"]
     if not 1 <= settings["required_completed_k"] <= model["k_max"]:
         raise ValueError("要求保留的K超出候选模型范围")
-    n_features = len(_features(output, target))
+    features = _features(output, target)
+    n_features = len(features)
     n_events = n_features * len(model["z_vals"])
     folds = parallel.read_json(cv/"folds.json")
     checked = []
+    data = None
+    evaluation_settings = numerical_settings(target)
     chunk = settings["cache_validation_chunk"]
     tolerance = settings["cache_probability_atol"]
     if type(chunk) is not int or chunk < 1 or not 0 < tolerance < 0.001:
@@ -282,15 +298,46 @@ def audit_cv_caches(target, settings, folds_to_check=None):
             if likelihood.shape not in ((model["cv_iterations"],), (model["cv_iterations"], 1)):
                 raise ValueError(f"缓存似然长度无效：{path}")
             test = np.asarray(cached["mean_likelihood_subj_test"])
-            if (test.shape not in ((len(folds[fold]["indices"]),), (len(folds[fold]["indices"]), 1))
-                    or not np.isfinite(test).all() or np.any(test <= 0)):
-                raise ValueError(f"缓存留出似然无效：{path}")
+            expected_n = len(folds[fold]["indices"])
+            if test.shape not in ((expected_n,), (expected_n, 1)):
+                raise ValueError(f"缓存留出似然形状{test.shape}与期望{expected_n}人不符：{path}")
+            if not np.isfinite(test).all() or np.any(test < 0):
+                raise ValueError(f"缓存留出似然负值={int((test<0).sum())}、非有限={int((~np.isfinite(test)).sum())}：{path}")
+            zero = test.reshape(-1) == 0
+            numerical = {"raw_zero_subjects": int(zero.sum()), "n_test": expected_n}
+            from pySuStaIn.ZscoreSustain import ZscoreSustain, ZScoreSustainData
+            if data is None:
+                _, data = _read_z(output/"reference/C3_primary_z.tsv", features)
+            heldout_values = data[np.asarray(folds[fold]["indices"])]
+            calculator = ZscoreSustain(heldout_values, np.tile(model["z_vals"], (n_features, 1)),
+                np.repeat(model["z_max"], n_features), features.label.tolist(), model["startpoints"], k,
+                model["cv_iterations"], str(cv), "read_only_cache_check", False, seed=model["seed"])
+            # 即使本折留出集没有零值，训练集也可能包含其他折的极端样本。
+            train_mask = np.ones(len(data), dtype=bool)
+            train_mask[folds[fold]["indices"]] = False
+            numerical["training_at_saved_ml_em"] = training_floor_audit(calculator,
+                ZScoreSustainData(data[train_mask], n_events), cached["ml_sequence_EM"], cached["ml_f_EM"], evaluation_settings)
+            if zero.any():
+                # 只对零值对应受试者重算冻结链，不拟合、不更改原缓存，也不填epsilon。
+                values = heldout_values[zero]
+                evaluated = evaluate_samples(calculator, ZScoreSustainData(values, n_events),
+                    cached["samples_sequence"], cached["samples_f"], evaluation_settings)
+                check_raw_mean(test.reshape(-1)[zero], evaluated, int(zero.sum()), evaluation_settings)
+                diagnostic = z_diagnostics(values, features.feature_id.tolist(), evaluation_settings)
+                reference = parallel.read_json(output/"reference/model.json")
+                scales = dict(zip(reference.get("feature_ids", []), reference.get("residual_sd", [])))
+                for feature in diagnostic["top_features"]:
+                    feature["ls_residual_sd"] = scales.get(feature["feature_id"])
+                numerical.update(verified_frozen_underflow=True, log_mean_min=float(evaluated["log_mean"].min()),
+                                 log_mean_max=float(evaluated["log_mean"].max()), z_diagnostics=diagnostic)
+                print(f"fold {fold:02d} K={k}：原始零似然{int(zero.sum())}/{expected_n}；"
+                      f"冻结链复核一致，对数域有限，min logL={numerical['log_mean_min']:.6g}；保留缓存。", flush=True)
             digest = _hash(path)
             after = path.stat()
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 raise RuntimeError("核验期间缓存正在写入；请稍后重试，旧任务未停止")
             checked.append({"path": str(path), "fold": fold, "k": k, "sha256": digest,
-                            "size": after.st_size, "mtime_ns": after.st_mtime_ns})
+                            "size": after.st_size, "mtime_ns": after.st_mtime_ns, "numerical_evaluation": numerical})
     return checked
 
 

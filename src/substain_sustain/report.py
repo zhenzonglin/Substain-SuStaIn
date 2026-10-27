@@ -210,7 +210,9 @@ def _plot_cv(writer: ReportWriter, output: Path) -> None:
     axes[0, 1].legend(fontsize=7)
     table = likelihood.merge(cvic, on="n_subtypes", how="left")
     writer.figure("03_model_selection", "C3 cross-validation and model selection", fig, table,
-                  "Model selection uses C3 only. GB is not used to choose the subtype count.")
+                  "Model selection uses C3 only. GB is not used to choose the subtype count. "
+                  "When evaluation_backend is logsumexp_v1, CVIC uses stable log mean likelihoods from the same frozen draws; "
+                  "raw zero counts and original floored log likelihoods remain in the source table.")
 
 
 def _plot_posterior_trace(writer: ReportWriter, model: dict) -> None:
@@ -577,6 +579,24 @@ def run_report(cfg: dict, output: Path, bundle_only: bool = False) -> dict:
                      ("Selection status", fit_summary.get("selection_status", "see selection.json")),
                      ("Features", len(dictionary)), ("Formal cohort findings", "No — synthetic data" if synthetic else "Interpret with QC and calibration diagnostics")]
     overview = '<table><tbody>' + ''.join('<tr><th style="text-align:left;padding-right:24px">' + html.escape(str(key)) + '</th><td>' + html.escape(str(value)) + '</td></tr>' for key, value in evidence_rows) + '</tbody></table>'
+    numerical_path = output/"model/cv/numerical_evaluation.json"
+    if numerical_path.is_file():
+        numerical = _json(numerical_path)
+        counts = numerical.get("raw_zero_subjects_per_k", {})
+        overview += '<p class="notice">Frozen-model likelihoods and posterior probabilities use log-sum-exp evaluation. '
+        overview += 'Original zero likelihoods remain in model caches; no arbitrary epsilon replaces them in CVIC. '
+        overview += 'Official EM/MCMC training, including its numerical floor, is unchanged. '
+        overview += 'This numerical repair does not establish adequate reference calibration or model fit.</p>'
+        overview += pd.DataFrame([{"K": key, "Held-out subjects with raw zero mean likelihood": value}
+                                  for key, value in counts.items()]).to_html(index=False, escape=True)
+        overview += '<p>Raw official posterior fields are unavailable (NaN with official_raw_available=false) when all linear '
+        overview += 'support is lost. Finite raw outputs with subnormal denominators are retained but marked official_raw_valid=false. '
+        overview += 'Separately named stable official fields and weighted joint probabilities are retained.</p>'
+        training = numerical.get("training_floor_counts_per_fold_k", [])
+        if training:
+            maximum = max(row["training_below_floor_subjects"] for row in training)
+            overview += f'<p>Largest count below the official training floor at a saved ML-EM solution: {maximum} '
+            overview += 'subjects within one fold/model. Counts overlap across folds; these are not unique cohort totals or all-iteration diagnostics.</p>'
     selection_path = output / "reference/feature_selection.json"
     exclusion_table_path = None
     if selection_path.is_file():

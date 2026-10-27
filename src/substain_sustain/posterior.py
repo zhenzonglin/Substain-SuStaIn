@@ -103,36 +103,73 @@ def infer_posterior(
     order = np.argsort(frac.mean(axis=1))[::-1]
     n_events = seq.shape[1]
     official_batches: dict[str, list[np.ndarray]] = {k: [] for k in OFFICIAL_NAMES}
+    stable_batches: dict[str, list[np.ndarray]] = {k: [] for k in OFFICIAL_NAMES}
+    raw_valid_batches = []
+    raw_available_batches = []
     joint_batches = []
+    from .log_evaluation import (build_log_kernel, log_joint, normalize_log_joint,
+                                 numerical_settings, stable_subtyping)
+    evaluation = getattr(engine, "_numerical_settings", numerical_settings({}))
+    log_kernel = build_log_kernel(engine, evaluation["block_rows"])
     for first in range(0, len(data), batch_size):
         batch = data[first:first + batch_size]
-        # 固定官方版本对 N=1 的 squeeze/reshape 有缺陷。仅在推断调用内部
-        # 临时重复一行并截回原行数；概率按受试者独立，不参与训练或计数。
-        # 测试要求单例、整批和尾批得到同一结果；输出始终只包含原始患者。
-        official_input = np.repeat(batch, 2, axis=0) if len(batch) == 1 else batch
-        raw = engine.subtype_and_stage_individuals_newData(official_input, seq, frac, len(indices))
-        for key, array in zip(OFFICIAL_NAMES, raw):
-            array = np.asarray(array)[:len(batch)]
-            if not np.all(np.isfinite(array)):
-                raise FloatingPointError(f"官方 {key} 返回非有限值。")
-            official_batches[key].append(array)
         sustain_data = ZScoreSustainData(batch, n_events)
         joint_mean = np.zeros((len(batch), n_events + 1, sequence.shape[0]))
+        raw_valid = np.ones(len(batch), dtype=bool)
+        raw_available = np.ones(len(batch), dtype=bool)
         for t in range(len(indices)):
-            likelihood = np.stack([
-                engine._calculate_likelihood_stage(sustain_data, seq[s, :, t])
-                for s in order
-            ], axis=2)
-            joint_t = normalize_weighted_likelihood(likelihood, frac[order, t])
+            stages, weighted = log_joint(log_kernel, sustain_data, seq[order, :, t], frac[order, t])
+            # 分母进入subnormal区即标记原线性输出缺乏数值支持；不填补它。
+            raw_likelihood = np.exp(stages)
+            raw_total = (raw_likelihood*frac[order, t][None, None, :]).sum(axis=(1, 2))
+            raw_valid &= raw_total >= np.finfo(float).tiny
+            raw_available &= raw_total > 0
+            joint_t = normalize_log_joint(stages, frac[order, t])
             joint_mean += (joint_t - joint_mean) / (t + 1)
+        shapes = {"ml_subtype": (1,), "prob_ml_subtype": (1,), "ml_stage": (1,), "prob_ml_stage": (1,),
+                  "prob_subtype": (len(order),), "prob_stage": (n_events+1,), "prob_subtype_stage": (n_events+1, len(order))}
+        raw_arrays = {key: np.full((len(batch), *shapes[key]), np.nan) for key in OFFICIAL_NAMES}
+        stable_arrays = {key: np.empty((len(batch), *shapes[key])) for key in OFFICIAL_NAMES}
+        # 所有可计算的官方原始输出均保留；低精度subnormal另标记，真正全零者原始字段为NaN。
+        for original in (True, False):
+            mask = raw_available if original else ~raw_valid
+            if not mask.any():
+                continue
+            subset = batch[mask]
+            # 固定官方版本的N=1 squeeze缺陷：临时重复后截回，不改变受试者数。
+            official_input = np.repeat(subset, 2, axis=0) if len(subset) == 1 else subset
+            target_data = ZScoreSustainData(official_input, n_events)
+            if original:
+                method = getattr(engine, "_raw_subtyping", engine.subtype_and_stage_individuals)
+                result = method(target_data, seq, frac, len(indices))
+            else:
+                result = stable_subtyping(engine, target_data, seq, frac, len(indices))
+            for key, value in zip(OFFICIAL_NAMES, result):
+                value = np.asarray(value)[:len(subset)]
+                if not np.isfinite(value).all():
+                    raise FloatingPointError(f"{'原始' if original else '稳定'}官方{key}仍非有限")
+                if original:
+                    raw_arrays[key][mask] = value
+                    stable_arrays[key][raw_valid] = raw_arrays[key][raw_valid]
+                else:
+                    stable_arrays[key][mask] = value
+        for key in OFFICIAL_NAMES:
+            official_batches[key].append(raw_arrays[key])
+            stable_batches[key].append(stable_arrays[key])
+        raw_valid_batches.append(raw_valid)
+        raw_available_batches.append(raw_available)
         joint_batches.append(joint_mean)
     result = summarize_joint(np.concatenate(joint_batches, axis=0))
     result.update({f"official_{key}": np.concatenate(value, axis=0)
                    for key, value in official_batches.items()})
+    result.update({f"official_stable_{key}": np.concatenate(value, axis=0)
+                   for key, value in stable_batches.items()})
+    result["official_raw_valid"] = np.concatenate(raw_valid_batches)
+    result["official_raw_available"] = np.concatenate(raw_available_batches)
     result["subtype_order"] = order
     result["selected_indices"] = indices
     # 官方 marginal 已乘 f；这两个核对定位联合概率修正的范围。
     for key in ("subtype", "stage"):
-        if not np.allclose(result[f"posterior_{key}"], result[f"official_prob_{key}"], rtol=1e-8, atol=1e-10):
-            raise AssertionError(f"派生后验与官方 {key} 边际不一致。")
+        if not np.allclose(result[f"posterior_{key}"], result[f"official_stable_prob_{key}"], rtol=1e-8, atol=1e-10):
+            raise AssertionError(f"派生后验与稳定官方 {key} 边际不一致。")
     return result

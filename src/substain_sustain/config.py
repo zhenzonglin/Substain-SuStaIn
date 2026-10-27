@@ -72,6 +72,8 @@ def validate_config(cfg: dict) -> None:
     execution_settings(cfg)
     from .startpoints import parallel_settings
     parallel_settings(cfg)
+    from .log_evaluation import numerical_settings
+    numerical_settings(cfg)
     from .feature_selection import selection_policy
     selection_policy(cfg)
     if set(cfg.get("cohorts", {})) != {"LS", "C3", "GB"}:

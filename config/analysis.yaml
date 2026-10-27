@@ -114,6 +114,16 @@ startpoint_parallel:
   pool_progress_filename: progress_pool.json
   worker_overhead_gb: 0.25
 
+# ===== 冻结模型的数值评估；只改变计算表示，官方训练目标不变 =====
+numerical_evaluation:
+  backend: logsumexp_v1
+  block_rows: 32
+  relative_tolerance: 0.0000000001
+  absolute_log_tolerance: 0.00000001
+  z_warning_threshold: 5
+  top_features: 5
+  heldout_dir: heldout_evaluation
+
 # ===== 八、空间展示资源与公开模板制图 =====
 assets:
   wmh_atlas: resources/display/wmh20.nii.gz

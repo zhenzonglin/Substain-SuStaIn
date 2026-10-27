@@ -1,0 +1,4 @@
+# ===== 只读检查已保存的K=1；不停止、不迁移、不拟合 =====
+migration_settings: config/startpoints30.yaml
+output_dir: .cache/heldout_diagnostics
+audit_max_k: 1
