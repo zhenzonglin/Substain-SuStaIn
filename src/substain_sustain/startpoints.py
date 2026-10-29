@@ -18,6 +18,7 @@ import time
 def parallel_settings(cfg: dict) -> dict:
     defaults = {"enabled": False, "workers_per_fold": 3, "fit_workers": 25,
                 "physical_core_limit": 30, "logical_cpu_limit": 60,
+                "worker_unit": "physical_core",
                 "checkpoint_dir": "startpoints", "pool_progress_filename": "progress_pool.json",
                 "worker_overhead_gb": 0.25}
     supplied = cfg.get("startpoint_parallel", {})
@@ -31,8 +32,11 @@ def parallel_settings(cfg: dict) -> dict:
             raise ValueError(f"startpoint_parallel.{key}必须为正整数")
     if settings["logical_cpu_limit"] < settings["physical_core_limit"]:
         raise ValueError("逻辑CPU预算不能小于物理核预算")
-    if max(settings["workers_per_fold"], settings["fit_workers"]) > settings["physical_core_limit"]:
-        raise ValueError("起点并行数超过物理核预算")
+    if settings["worker_unit"] not in ("physical_core", "logical_cpu"):
+        raise ValueError("worker_unit必须为physical_core或logical_cpu")
+    slots = settings["physical_core_limit"] if settings["worker_unit"] == "physical_core" else settings["logical_cpu_limit"]
+    if max(settings["workers_per_fold"], settings["fit_workers"]) > slots:
+        raise ValueError("起点并行数超过计算槽位预算")
     import math
     overhead = settings["worker_overhead_gb"]
     if type(overhead) not in (int, float) or not math.isfinite(overhead) or overhead <= 0:
@@ -46,6 +50,15 @@ def parallel_settings(cfg: dict) -> dict:
     if settings["enabled"] and cfg.get("acceleration", {}).get("backend") != "row_blocks":
         raise ValueError("起点并行的内存预算要求已验证的row_blocks后端")
     return settings
+
+
+def worker_cpu_groups(topology: dict, settings: dict) -> list[list[int]]:
+    """物理核模式每核一个起点；SMT模式每逻辑CPU一个起点，先铺开物理核。"""
+    groups = topology["core_cpu_groups"]
+    if settings.get("worker_unit", "physical_core") == "physical_core":
+        return groups
+    return [[group[level]] for level in range(max(map(len, groups)))
+            for group in groups if level < len(group)]
 
 
 def cpu_topology(settings: dict, *, allowed=None, sys_root=Path("/sys/devices/system/cpu"), quota=True) -> dict:
@@ -94,8 +107,9 @@ def cpu_topology(settings: dict, *, allowed=None, sys_root=Path("/sys/devices/sy
             limit = int((legacy / "cpu.cfs_quota_us").read_text())
             if limit > 0:
                 quotas.append(limit / int((legacy / "cpu.cfs_period_us").read_text()))
-        if quotas and min(quotas) < physical:
-            raise RuntimeError(f"cgroup CPU时间配额{min(quotas):g}核小于请求的{physical}核")
+        requested = logical if settings.get("worker_unit") == "logical_cpu" else physical
+        if quotas and min(quotas) < requested:
+            raise RuntimeError(f"cgroup CPU时间配额{min(quotas):g}小于请求的{requested}个CPU时间单位")
     return {"physical_cores": physical, "logical_cpus": logical, "core_cpu_groups": selected,
             "cpu_ids": sorted(cpu for group in selected for cpu in group),
             "quota_cores": min(quotas) if quotas else None}

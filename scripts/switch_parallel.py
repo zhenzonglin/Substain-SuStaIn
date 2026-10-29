@@ -82,7 +82,12 @@ def resource_check(cfg, settings):
     resource = _resources(cfg, output / "model/cv", len(frame), len(features),
                           model["cv_iterations"], model["k_max"], model["folds"], model["folds"])
     if settings["require_requested_workers"] and resource["workers"] != settings["workers"]:
-        raise MemoryError(f"请求{settings['workers']}并行，当前CPU/内存/折数只允许{resource['workers']}；尚未停止旧进程。")
+        each = resource.get("startpoint_workers_per_model", 1)
+        message = f"请求{settings['workers']}折×{each}起点，当前CPU/内存/折数只允许{resource['workers']}折×{each}起点"
+        if "estimated_worker_bytes" in resource and "memory_budget_bytes" in resource:
+            message += (f"；请求工作集约{resource['estimated_worker_bytes'] * settings['workers'] / 1024**3:.2f} GiB，"
+                        f"预算{resource['memory_budget_bytes'] / 1024**3:.2f} GiB")
+        raise MemoryError(message + "；尚未停止旧进程。")
     return resource
 
 

@@ -47,6 +47,12 @@ def target_config(cfg, settings):
     return target
 
 
+def legacy_sources(settings):
+    """迁移只接受配置中逐文件固定哈希的已发布版本。"""
+    return [{"ref": settings["legacy_source_ref"], "hashes": settings["legacy_wrapper_source_sha256"]},
+            *settings.get("additional_legacy_sources", [])]
+
+
 def plan(target, settings):
     from sklearn.model_selection import KFold
     from substain_sustain.model import _identity, _features, _read_z, _model_seed
@@ -59,13 +65,21 @@ def plan(target, settings):
             raise ValueError(f"已有{stage}记录，拒绝在未知阶段停止或迁移")
     old = parallel.read_json(cv / "manifest.json")
     new = _identity(target, output, [output / "reference/C3_primary_z.tsv"], "C3_crossvalidation")
-    if old.get("wrapper_source_sha256") not in (settings["legacy_wrapper_source_sha256"], new["wrapper_source_sha256"]):
+    permitted = [item["hashes"] for item in legacy_sources(settings)] + [new["wrapper_source_sha256"]]
+    if old.get("wrapper_source_sha256") not in permitted:
         raise ValueError("旧包装器不在已测试的迁移来源内；源码修改不能借本工具跳过检查")
     if scientific_identity(old) != scientific_identity(new):
         raise ValueError("输入、LS参考、官方库、依赖、模型/运行参数或特征方案改变，拒绝迁移")
     from substain_sustain.startpoints import parallel_settings
     if settings.get("preserve_acceleration") and old.get("acceleration_config") != new["acceleration_config"]:
         raise ValueError("此次起点并行迁移不允许同时改变分块似然或心跳参数")
+    if settings.get("preserve_numerical_evaluation") and old.get("numerical_evaluation_config") != new["numerical_evaluation_config"]:
+        raise ValueError("此次CPU调度迁移不允许同时改变冻结模型评估参数")
+    if settings.get("require_existing_startpoint_parallel") and not old.get("startpoint_parallel_config", {}).get("enabled"):
+        raise ValueError("本次SMT迁移要求已启用起点检查点的版本；未停止旧任务")
+    if (settings.get("preserve_completed_startpoints") and old.get("startpoint_parallel_config", {}).get("enabled")
+            and old["startpoint_parallel_config"]["checkpoint_dir"] != new["startpoint_parallel_config"]["checkpoint_dir"]):
+        raise ValueError("保留完整起点的迁移不允许同时改检查点目录名称")
     if "startpoint_parallel" not in settings and old.get("startpoint_parallel_config", parallel_settings({})) != new["startpoint_parallel_config"]:
         raise ValueError("本次切换未授权更改起点并行配置")
     frame, _ = _read_z(output / "reference/C3_primary_z.tsv", _features(output, target))
@@ -137,7 +151,9 @@ def matching_processes(cfg):
             tokens = process.cmdline()
             if len(tokens) < 3 or "--resume" not in tokens:
                 continue
-            if Path(tokens[1]).name not in ("switch_parallel.py", "switch_acceleration.py", "switch_startpoints.py"):
+            # nohup python -u script.py是已提供的续跑入口，不能漏掉其协调器。
+            script_name = next((Path(token).name for token in tokens[1:] if not token.startswith("-")), None)
+            if script_name not in ("switch_parallel.py", "switch_acceleration.py", "switch_startpoints.py"):
                 continue
             cwd = Path(process.cwd()).resolve()
             config_arg = monitor.argument(tokens, "--config")
@@ -208,6 +224,9 @@ def prepare_backup(target, settings, backup):
                "scientific_parameters_unchanged": True, "incomplete_chains": "preserved; will be rerun"}
     if strict_caches is not None:
         receipt["validated_caches"] = strict_caches
+    if settings.get("preserve_completed_startpoints"):
+        from startpoint_cache_migration import checkpoint_plan
+        receipt["startpoint_checkpoints"] = checkpoint_plan(target, old, new)
     parallel.atomic_bytes(backup / "receipt.json", parallel.encoded(receipt))
     return updates, originals, receipt
 
@@ -225,6 +244,9 @@ def migrate(target, transaction, backup):
             if (path.read_bytes() if path.exists() else None) != original:
                 raise RuntimeError("备份后文件被其他进程修改；未迁移，请核查其他调度器")
         try:
+            if "startpoint_checkpoints" in receipt:
+                from startpoint_cache_migration import install_checkpoints
+                receipt["startpoint_results_copied"] = install_checkpoints(receipt["startpoint_checkpoints"])
             for path, value in updates.items():
                 parallel.atomic_bytes(path, value)
             if load_config(target["_config_file"]) != target:
@@ -348,7 +370,7 @@ def parallel_equivalence(target, settings, directory):
     from threadpoolctl import threadpool_limits
     from pySuStaIn.ZscoreSustain import ZScoreSustainData
     from substain_sustain.model import _engine
-    from substain_sustain.startpoints import cpu_topology, parallel_settings
+    from substain_sustain.startpoints import cpu_topology, parallel_settings, worker_cpu_groups
     probe = settings["parallel_probe"]
     psettings = parallel_settings(target)
     topology = cpu_topology(psettings)
@@ -358,7 +380,7 @@ def parallel_equivalence(target, settings, directory):
              "_acceleration": {**execution_settings(target), "progress_enabled": False}}
     count = min(probe["startpoints"], psettings["workers_per_fold"])
     parallel_model = {**plain, "_acceleration": execution_settings(target), "_startpoint_parallel": psettings,
-                      "_startpoint_runtime": {"workers": count, "core_cpu_groups": topology["core_cpu_groups"][:count]}}
+                      "_startpoint_runtime": {"workers": count, "core_cpu_groups": worker_cpu_groups(topology, psettings)[:count]}}
     with threadpool_limits(limits=1):
         serial = _engine(values, features, plain, directory/"serial", probe["seed"], probe["mcmc_iterations"], 1)
         concurrent = _engine(values, features, parallel_model, directory/"parallel", probe["seed"], probe["mcmc_iterations"], 1)
@@ -380,8 +402,11 @@ def main(default_settings=None, entry_script=None):
     parser.add_argument("--config", required=True)
     parser.add_argument("--settings", type=Path, default=default_settings or Path(__file__).resolve().parents[1]/"config/acceleration_switch.yaml")
     parser.add_argument("--apply", action="store_true", help="完成预检后备份、停止旧任务、迁移并后台续跑")
+    parser.add_argument("--resources-only", action="store_true", help="只读显示目标CPU/内存并发，不检查或迁移缓存、不停止任务")
     parser.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.resources_only and (args.apply or args.resume):
+        parser.error("--resources-only不能与--apply或--resume同时使用")
     cfg = load_config(args.config)
     settings = yaml.safe_load(args.settings.read_text(encoding="utf-8"))
     execution_settings({"acceleration": settings["acceleration"]})
@@ -398,6 +423,13 @@ def main(default_settings=None, entry_script=None):
     root, config_path = Path(cfg["project_dir"]), Path(cfg["_config_file"])
     if Path.cwd().resolve() != root or config_path.parent != root/"config" or not config_path.name.startswith("local."):
         raise ValueError("请在项目根目录操作，并使用config/local.*.yaml配置")
+    if args.resources_only:
+        import json
+        target = target_config(cfg, settings)
+        resources = parallel.resource_check(target, {**settings, "require_requested_workers": False})
+        print(json.dumps(resources, ensure_ascii=False, indent=2), flush=True)
+        print("仅显示执行资源估算；未停止任务、未写入配置、未迁移缓存。", flush=True)
+        return
     from substain_sustain.model import _lock
     with _lock(Path(cfg["output_dir"])/"execution/acceleration_switch"):
         target = target_config(cfg, settings)
@@ -410,11 +442,16 @@ def main(default_settings=None, entry_script=None):
         if resources.get("startpoint_workers_per_model", 1) < settings.get("require_startpoint_workers", 1):
             raise MemoryError("内存不足以提供请求的每折起点并行数；未停止旧任务")
         cache_check = audit_cv_caches(target, settings) if "required_completed_k" in settings else None
+        checkpoint_check = []
+        if settings.get("preserve_completed_startpoints"):
+            from startpoint_cache_migration import checkpoint_plan
+            checkpoint_check = checkpoint_plan(target, old, new)
         backup = root/settings["backup_dir"]/(datetime.now().strftime("%Y%m%d_%H%M%S")+"_"+uuid.uuid4().hex[:8])
         backup.mkdir(parents=True)
         # 保留允许来源的原代码，供审计和必要时人工恢复；缺失/哈希不符在停止前拒绝。
-        for name, expected in settings["legacy_wrapper_source_sha256"].items():
-            data = subprocess.check_output(["git", "show", f"{settings['legacy_source_ref']}:src/substain_sustain/{name}"], cwd=root)
+        legacy = next((item for item in legacy_sources(settings) if item["hashes"] == old["wrapper_source_sha256"]), legacy_sources(settings)[0])
+        for name, expected in legacy["hashes"].items():
+            data = subprocess.check_output(["git", "show", f"{legacy['ref']}:src/substain_sustain/{name}"], cwd=root)
             if hashlib.sha256(data).hexdigest() != expected:
                 raise ValueError("配置指定的旧代码与已验证哈希不同")
             (backup/f"legacy_{name}").write_bytes(data)
@@ -422,11 +459,17 @@ def main(default_settings=None, entry_script=None):
         parallel_check = parallel_equivalence(target, settings, backup/"parallel_probe") if "parallel_probe" in settings else None
         parallel.atomic_bytes(backup/"preflight.json", parallel.encoded({"resources": resources, "equivalence": check,
             "parallel_equivalence": parallel_check, "validated_caches": cache_check,
+            "startpoint_results_to_copy": sum(len(item["points"]) for item in checkpoint_check),
             "processes": [{"pid": p.pid, "created": p.create_time()} for p in processes]}))
         print(f"预检通过：{check['subjects']}例C3、{check['features']}维、逐元素一致；资源允许{resources['workers']}并行。", flush=True)
         if resources.get("parallel_startpoints"):
             print(f"每折{resources['startpoint_workers_per_model']}起点；同时计算上限{resources['max_compute_processes']}；"
                   "内存预算保持原配置，物理核/逻辑CPU预算为上限。", flush=True)
+            unit = resources.get("worker_unit", "physical_core")
+            print(f"调度单位：{unit}；预计工作集{resources['estimated_worker_bytes'] * resources['workers'] / 1024**3:.2f} GiB / "
+                  f"预算{resources['memory_budget_bytes'] / 1024**3:.2f} GiB。", flush=True)
+            if resources["max_compute_processes"] < resources.get("requested_compute_processes", 0):
+                print("内存或CPU配额限制了实际并发；请求上限不等于操作系统running数量。", flush=True)
         if not args.apply:
             print(f"未停止或迁移任务。审计：{backup}；加--apply执行切换。")
             return

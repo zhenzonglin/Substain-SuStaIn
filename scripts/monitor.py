@@ -352,7 +352,8 @@ def render(cfg: dict, settings: dict, rows: list[dict], roots: list[dict], inacc
         topology = resources.get("cpu_topology", {})
         lines.insert(4, f"起点并行：每折{resources.get('startpoint_workers_per_model')} | "
                      f"计算进程上限{resources.get('max_compute_processes')} | "
-                     f"CPU范围{topology.get('physical_cores')}物理核/{topology.get('logical_cpus')}逻辑CPU；BLAS=1")
+                     f"CPU范围{topology.get('physical_cores')}物理核/{topology.get('logical_cpus')}逻辑CPU；"
+                     f"分配单位{resources.get('worker_unit', 'physical_core')}；BLAS=1")
     if not roots:
         lines.append("  当前未检测到该分析的活跃入口；完成/失败状态以已保存记录为准。")
     for command, label in STAGES.items():

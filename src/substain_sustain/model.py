@@ -295,7 +295,7 @@ def _resources(cfg: dict, directory: Path, n_rows: int, n_features: int,
     parallel = parallel_settings(cfg)
     extra = {}
     if parallel["enabled"]:
-        from .startpoints import cpu_topology
+        from .startpoints import cpu_topology, worker_cpu_groups
         topology = cpu_topology(parallel)
         per_fold = min(parallel["workers_per_fold"] if jobs > 1 else parallel["fit_workers"], cfg["model"]["startpoints"])
         # 候选位置张量最多同时保留新旧两个；分块后不再保留全受试者×特征×阶段张量。
@@ -312,8 +312,11 @@ def _resources(cfg: dict, directory: Path, n_rows: int, n_features: int,
         if per_fold < 1:
             raise MemoryError("一个官方EM起点及父进程已超过内存预算")
         estimate = max(estimate, parent + per_fold * em_worker)
-        workers = min(jobs, int(cfg["model"]["workers"]), topology["physical_cores"] // per_fold, budget // estimate)
+        slots = len(worker_cpu_groups(topology, parallel))
+        workers = min(jobs, int(cfg["model"]["workers"]), slots // per_fold, budget // estimate)
         extra = {"cpu_topology": topology, "startpoint_workers_per_model": per_fold,
+                 "worker_unit": parallel["worker_unit"], "compute_slots": slots,
+                 "requested_compute_processes": min(jobs, int(cfg["model"]["workers"])) * per_fold,
                  "max_compute_processes": int(workers) * per_fold, "estimated_em_worker_bytes": em_worker,
                  "estimated_parent_bytes": parent, "parallel_startpoints": True}
     if workers < 1:
@@ -465,11 +468,11 @@ def run_crossvalidate(cfg: dict, output: Path) -> dict:
         jobs = [{"output": str(output), "cfg": cfg, "fold": fold, "splits": splits, "identity": identity} for fold in range(n_folds)]
         if resource["parallel_startpoints"]:
             import multiprocessing as mp
-            from .startpoints import initialize_fold, _abort_executor
+            from .startpoints import initialize_fold, _abort_executor, worker_cpu_groups
             context = mp.get_context("spawn")
             allocation_queue = context.Queue()
             per_fold = resource["startpoint_workers_per_model"]
-            groups = resource["cpu_topology"]["core_cpu_groups"]
+            groups = worker_cpu_groups(resource["cpu_topology"], parallel_settings(cfg))
             for slot in range(resource["workers"]):
                 allocation_queue.put({"workers": per_fold, "core_cpu_groups": groups[slot*per_fold:(slot+1)*per_fold]})
             executor = ProcessPoolExecutor(max_workers=resource["workers"], mp_context=context,
@@ -655,8 +658,10 @@ def run_fit(cfg: dict, output: Path) -> dict:
         resource = _resources(cfg, directory, len(data), len(features), settings["fit_iterations"], chosen, 1, weighted_copies)
         _json(directory / "resources.json", resource)
         if resource["parallel_startpoints"]:
+            from .startpoints import worker_cpu_groups
             count = resource["startpoint_workers_per_model"]
-            settings["_startpoint_runtime"] = {"workers": count, "core_cpu_groups": resource["cpu_topology"]["core_cpu_groups"][:count]}
+            groups = worker_cpu_groups(resource["cpu_topology"], parallel_settings(cfg))
+            settings["_startpoint_runtime"] = {"workers": count, "core_cpu_groups": groups[:count]}
         _json(directory / "model_seeds.json", {str(seed): {str(k): _model_seed(seed, -1, k)
                                                            for k in range(1, chosen + 1)} for seed in seeds})
         fitted = []

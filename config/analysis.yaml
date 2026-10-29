@@ -110,6 +110,7 @@ startpoint_parallel:
   fit_workers: 25
   physical_core_limit: 30
   logical_cpu_limit: 60
+  worker_unit: physical_core  # 默认每物理核一个计算进程；SMT模式经专用迁移入口启用。
   checkpoint_dir: startpoints
   pool_progress_filename: progress_pool.json
   worker_overhead_gb: 0.25
